@@ -107,26 +107,49 @@
         .form-hint { font-size:12px; color:var(--text3); margin-top:6px; padding-left:4px; }
         .form-submit-wrap { margin-top:auto; padding-top:24px; }
 
-        .lunch-toggle { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-        .lunch-btn {
-            min-height:56px; border-radius:var(--r); border:1.5px solid var(--border);
-            background:var(--surface); color:var(--text2);
-            font-size:15px; font-weight:600; font-family:var(--font); cursor:pointer; transition:all .15s;
+        /* 필드 하단 안내 박스 (필드설정 시트의 "하단 안내 박스" 컬럼) */
+        .field-help-box {
+            font-size:12.5px; color:#92700a; line-height:1.6; background:#fff8e0;
+            border:1px solid #f3e2a0; border-radius:12px; padding:12px 14px; margin-bottom:10px;
         }
-        .lunch-btn.selected { background:var(--accent); border-color:var(--accent); color:#000; font-weight:700; }
-        .lunch-btn:active { transform:scale(.97); }
 
-        .schedule-options { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-        .schedule-btn {
-            min-height:100px; border-radius:var(--r); border:1.5px solid var(--border);
-            background:var(--surface); color:var(--text); font-family:var(--font);
-            cursor:pointer; padding:14px 12px; text-align:center; transition:all .15s; white-space:pre-line;
+        /* 인원 카운터 (counter-group) */
+        .counter-group { display:flex; flex-direction:column; gap:10px; }
+        .counter-row {
+            display:flex; align-items:center; justify-content:space-between;
+            padding:14px 16px; background:var(--surface); border:1.5px solid var(--border); border-radius:var(--r);
         }
-        .schedule-btn strong { display:block; font-size:16px; font-weight:800; letter-spacing:-.03em; margin-bottom:4px; }
-        .schedule-btn span   { font-size:11px; color:var(--text2); line-height:1.5; }
-        .schedule-btn.selected { background:#1a1916; border-color:#1a1916; color:#fff; }
-        .schedule-btn.selected span { color:rgba(255,255,255,.6); }
-        .schedule-btn:active { transform:scale(.97); }
+        .counter-row-text strong { display:block; font-size:14px; font-weight:700; margin-bottom:2px; }
+        .counter-row-text span   { font-size:11px; color:var(--text2); }
+        .counter-controls { display:flex; align-items:center; gap:14px; flex-shrink:0; }
+        .counter-btn {
+            width:32px; height:32px; border-radius:50%; border:1.5px solid var(--border);
+            background:var(--bg); color:var(--text); font-size:17px; line-height:1; font-family:var(--font);
+            cursor:pointer; display:flex; align-items:center; justify-content:center;
+        }
+        .counter-btn:active { transform:scale(.9); }
+        .counter-value { font-size:16px; font-weight:800; min-width:22px; text-align:center; }
+
+        /* 선택 카드 (select) — 참여일정/체험프로그램 등 */
+        .option-cards { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+        .option-card {
+            min-height:90px; border-radius:var(--r); border:1.5px solid var(--border);
+            background:var(--surface); color:var(--text); font-family:var(--font);
+            cursor:pointer; padding:14px 12px; text-align:center; transition:all .15s;
+        }
+        .option-card strong { display:block; font-size:15px; font-weight:800; letter-spacing:-.03em; margin-bottom:4px; }
+        .option-card span   { display:block; font-size:11px; color:var(--text2); line-height:1.5; }
+        .option-card.selected { background:#1a1916; border-color:#1a1916; color:#fff; }
+        .option-card.selected span { color:rgba(255,255,255,.6); }
+        .option-card:active { transform:scale(.97); }
+
+        /* 개인정보 수집·이용 동의 */
+        .consent-box {
+            display:flex; align-items:flex-start; gap:12px; padding:16px;
+            background:var(--surface); border:1.5px solid var(--accent); border-radius:var(--r); margin-bottom:18px;
+        }
+        .consent-checkbox { width:22px; height:22px; flex-shrink:0; margin-top:1px; accent-color:var(--accent); }
+        .consent-text { font-size:13px; color:var(--text2); line-height:1.6; }
 
         .btn {
             width:100%; min-height:62px; border:none; border-radius:var(--r);
@@ -218,14 +241,16 @@
             <input class="form-input" id="ci-phone" type="tel" placeholder="01012345678" autocomplete="tel" inputmode="numeric" />
             <div class="form-hint">숫자만 입력하면 자동으로 000-0000-0000 형식으로 표시돼요</div>
         </div>
-        <div class="form-group" id="ci-lunch-group">
-            <label class="form-label" id="ci-meal-label"><span id="ci-meal-text"></span> <span class="req">*</span></label>
-            <div class="lunch-toggle">
-                <button type="button" class="lunch-btn" id="ci-lunch-yes" data-value="예">먹어요</button>
-                <button type="button" class="lunch-btn" id="ci-lunch-no"  data-value="아니오">안먹어요</button>
-            </div>
-            <input type="hidden" id="ci-lunch" value="" />
+
+        <!-- 커스텀 필드 (설정된 경우에만 동적으로 채워짐) -->
+        <div id="ci-fields"></div>
+
+        <!-- 개인정보 동의 (커스텀 필드가 있을 때만 노출) -->
+        <div class="consent-box" id="ci-consent-wrap" style="display:none">
+            <input type="checkbox" class="consent-checkbox" id="ci-consent" />
+            <div class="consent-text">개인정보 수집·이용에 동의합니다. (행사 운영 목적에 한해 사용되며, 행사 종료 후 파기됩니다.)</div>
         </div>
+
         <div class="form-submit-wrap">
             <button class="btn btn-primary" id="btn-checkin-submit">참석 확인하기</button>
         </div>
@@ -257,19 +282,16 @@
             <input class="form-input" id="re-phone" type="tel" placeholder="01012345678" autocomplete="tel" inputmode="numeric" />
             <div class="form-hint">숫자만 입력하면 자동으로 000-0000-0000 형식으로 표시돼요</div>
         </div>
-        <div class="form-group" id="re-lunch-group">
-            <label class="form-label" id="re-meal-label"><span id="re-meal-text"></span> <span class="req">*</span></label>
-            <div class="lunch-toggle">
-                <button type="button" class="lunch-btn" id="re-lunch-yes" data-value="예">먹어요</button>
-                <button type="button" class="lunch-btn" id="re-lunch-no"  data-value="아니오">안먹어요</button>
-            </div>
-            <input type="hidden" id="re-lunch" value="" />
+
+        <!-- 동적 이벤트 필드 + 커스텀 필드 (전부 동적으로 채워짐) -->
+        <div id="re-fields"></div>
+
+        <!-- 개인정보 동의 (현장신청은 항상 노출/필수) -->
+        <div class="consent-box">
+            <input type="checkbox" class="consent-checkbox" id="re-consent" />
+            <div class="consent-text">개인정보 수집·이용에 동의합니다. (행사 운영 목적에 한해 사용되며, 행사 종료 후 파기됩니다.)</div>
         </div>
-        <div class="form-group" id="schedule-group" style="display:none">
-            <label class="form-label">참여 일정 선택 <span class="req">*</span></label>
-            <div class="schedule-options" id="schedule-options"></div>
-            <input type="hidden" id="re-schedule" value="" />
-        </div>
+
         <div class="form-submit-wrap">
             <button class="btn btn-primary" id="btn-register-submit">현장 신청하기</button>
         </div>
@@ -298,7 +320,9 @@
 <script>
     (function() {
         /* ── 설정값 기본값 (서버에서 덮어씀) ── */
-        var CORPS = [], ON_SITE_OPEN = true, ENABLE_MEAL = false, MEAL_LABEL = '식사', ENABLE_SCHEDULE = false, SCHEDULE_OPTIONS = null;
+        var CORPS = [], ON_SITE_OPEN = true;
+        var CHECKIN_FIELDS = [], REGISTER_FIELDS = [];
+        var ciControls = [], reControls = [];
 
         /* ── 서버에서 설정 받아오기 (/api/config) ── */
         fetch('/api/config')
@@ -306,12 +330,9 @@
             .then(function(cfg) {
                 CORPS            = cfg.corps           || [];
                 ON_SITE_OPEN     = cfg.onSiteOpen      !== false;
-                ENABLE_MEAL      = cfg.enableMeal      === true;
-                MEAL_LABEL       = cfg.mealLabel       || '식사';
-                ENABLE_SCHEDULE  = cfg.enableSchedule  === true;
-                SCHEDULE_OPTIONS = cfg.scheduleOptions || null;
+                CHECKIN_FIELDS   = cfg.checkinFields    || [];
+                REGISTER_FIELDS  = cfg.registerFields   || [];
 
-                /* 타이틀 */
                 var t = document.getElementById('home-title');
                 if (t) { t.textContent = (cfg.eventTitle || '참석') + ' 참석 접수'; }
                 document.title = cfg.eventTitle || '참석 접수';
@@ -323,8 +344,8 @@
         /* ── 초기화 (config 수신 후 실행) ── */
         function initPage() {
             /* 법인 목록 채우기 */
-            ['ci-corp', 're corp'].forEach(function(id) {
-                var sel = document.getElementById(id.replace(' ', '-'));
+            ['ci-corp', 're-corp'].forEach(function(id) {
+                var sel = document.getElementById(id);
                 if (!sel) return;
                 CORPS.forEach(function(c) {
                     var opt = document.createElement('option');
@@ -341,33 +362,12 @@
                 sub.textContent = '현재 현장 신청이 마감되었어요';
             }
 
-            /* 식사 라벨 */
-            document.getElementById('ci-meal-text').textContent = MEAL_LABEL + ' 식사 여부';
-            document.getElementById('re-meal-text').textContent = MEAL_LABEL + ' 식사 여부';
+            /* 커스텀/동적 필드 렌더링 */
+            renderFields(document.getElementById('ci-fields'), CHECKIN_FIELDS, ciControls);
+            renderFields(document.getElementById('re-fields'), REGISTER_FIELDS, reControls);
 
-            /* 식사 비활성 시 숨김 */
-            if (!ENABLE_MEAL) {
-                document.getElementById('ci-lunch-group').style.display = 'none';
-                document.getElementById('re-lunch-group').style.display = 'none';
-            }
-
-            /* 참여일정 */
-            if (ENABLE_SCHEDULE && SCHEDULE_OPTIONS && SCHEDULE_OPTIONS.length > 0) {
-                var grp  = document.getElementById('schedule-group');
-                var cont = document.getElementById('schedule-options');
-                grp.style.display = 'block';
-                SCHEDULE_OPTIONS.forEach(function(opt) {
-                    var b = document.createElement('button');
-                    b.type = 'button'; b.className = 'schedule-btn'; b.dataset.value = opt.value;
-                    b.innerHTML = '<strong>' + opt.label + '</strong><span>' + opt.sub.replace(/\n/g, '<br>') + '</span>';
-                    b.addEventListener('click', function() {
-                        document.querySelectorAll('.schedule-btn').forEach(function(x) { x.classList.remove('selected'); });
-                        this.classList.add('selected');
-                        document.getElementById('re-schedule').value = this.dataset.value;
-                    });
-                    cont.appendChild(b);
-                });
-            }
+            /* 참석확인 화면은 커스텀 필드가 있을 때만 동의 노출 */
+            document.getElementById('ci-consent-wrap').style.display = CHECKIN_FIELDS.length > 0 ? 'flex' : 'none';
 
             /* 이벤트 바인딩 */
             document.getElementById('btn-checkin').addEventListener('click', function() { goTo('checkin'); });
@@ -381,26 +381,7 @@
             document.getElementById('btn-register-submit').addEventListener('click', submitRegister);
             document.getElementById('btn-qr-home').addEventListener('click',         function() { goTo('home'); });
 
-
-            /* 식사 토글 */
-            [['ci-lunch-yes','ci-lunch-no','ci-lunch'],['re-lunch-yes','re-lunch-no','re-lunch']].forEach(function(ids) {
-                [ids[0], ids[1]].forEach(function(id) {
-                    document.getElementById(id).addEventListener('click', function() {
-                        document.getElementById(ids[0]).classList.remove('selected');
-                        document.getElementById(ids[1]).classList.remove('selected');
-                        this.classList.add('selected');
-                        document.getElementById(ids[2]).value = this.dataset.value;
-                    });
-                });
-            });
-
-            /* 전화번호 포맷 */
-            function applyPhoneFormat(input) {
-                var d = input.value.replace(/[^0-9]/g, '').slice(0, 11);
-                input.value = d.length <= 3 ? d
-                    : d.length <= 7  ? d.slice(0,3) + '-' + d.slice(3)
-                        : d.slice(0,3) + '-' + d.slice(3,7) + '-' + d.slice(7);
-            }
+            /* 전화번호 포맷 (기본 전화번호 입력창) */
             ['ci-phone', 're-phone'].forEach(function(id) {
                 var el = document.getElementById(id);
                 el.addEventListener('input', function() { applyPhoneFormat(this); });
@@ -408,12 +389,147 @@
             });
         } /* end initPage */
 
+        /* ── 공용 포맷터 ── */
+        function applyPhoneFormat(input) {
+            var d = input.value.replace(/[^0-9]/g, '').slice(0, 11);
+            input.value = d.length <= 3 ? d
+                : d.length <= 7  ? d.slice(0,3) + '-' + d.slice(3)
+                    : d.slice(0,3) + '-' + d.slice(3,7) + '-' + d.slice(7);
+        }
+        function applyDateFormat(input) {
+            var d = input.value.replace(/[^0-9]/g, '').slice(0, 6);
+            input.value = d.length <= 2 ? d
+                : d.length <= 4 ? d.slice(0,2) + '-' + d.slice(2)
+                    : d.slice(0,2) + '-' + d.slice(2,4) + '-' + d.slice(4);
+        }
+
+        /* ── 필드 렌더링 (필드설정/필드옵션 기반, 완전 동적) ──
+           입력방식: text / phone / date / number / counter-group / select */
+        function renderFields(containerEl, fieldList, controlsOut) {
+            if (!containerEl) return;
+            containerEl.innerHTML = '';
+            controlsOut.length = 0;
+
+            fieldList.forEach(function(field) {
+                var wrap = document.createElement('div');
+                wrap.className = 'form-group';
+
+                var label = document.createElement('label');
+                label.className = 'form-label';
+                label.innerHTML = field.name
+                    + (field.sideNote ? ' <span class="opt">(' + field.sideNote + ')</span>' : '')
+                    + (field.required ? ' <span class="req">*</span>' : '');
+                wrap.appendChild(label);
+
+                if (field.helpNote) {
+                    var help = document.createElement('div');
+                    help.className = 'field-help-box';
+                    help.textContent = field.helpNote;
+                    wrap.appendChild(help);
+                }
+
+                var control = { name: field.name, required: field.required };
+
+                if (field.type === 'counter-group') {
+                    var group = document.createElement('div'); group.className = 'counter-group';
+                    var counters = {};
+                    (field.options || []).forEach(function(opt) {
+                        var row = document.createElement('div'); row.className = 'counter-row';
+                        row.innerHTML =
+                            '<div class="counter-row-text"><strong>' + opt.name + '</strong>'
+                            + (opt.desc ? '<span>' + opt.desc + '</span>' : '') + '</div>'
+                            + '<div class="counter-controls">'
+                            + '<button type="button" class="counter-btn counter-minus">−</button>'
+                            + '<span class="counter-value">' + (opt.min || 0) + '</span>'
+                            + '<button type="button" class="counter-btn counter-plus">+</button>'
+                            + '</div>';
+                        group.appendChild(row);
+                        var valEl = row.querySelector('.counter-value');
+                        var min   = opt.min || 0;
+                        row.querySelector('.counter-minus').addEventListener('click', function() {
+                            var v = parseInt(valEl.textContent, 10);
+                            if (v > min) valEl.textContent = String(v - 1);
+                        });
+                        row.querySelector('.counter-plus').addEventListener('click', function() {
+                            valEl.textContent = String(parseInt(valEl.textContent, 10) + 1);
+                        });
+                        counters[opt.name] = valEl;
+                    });
+                    wrap.appendChild(group);
+                    control.getValue = function() {
+                        var out = {};
+                        Object.keys(counters).forEach(function(k) { out[k] = counters[k].textContent; });
+                        return out;
+                    };
+                    control.isValid = function() { return true; };
+
+                } else if (field.type === 'select') {
+                    var cards = document.createElement('div'); cards.className = 'option-cards';
+                    var selected = null;
+                    (field.options || []).forEach(function(opt) {
+                        var btn = document.createElement('button');
+                        btn.type = 'button'; btn.className = 'option-card';
+                        btn.innerHTML = '<strong>' + opt.name + '</strong>' + (opt.desc ? '<span>' + opt.desc + '</span>' : '');
+                        btn.addEventListener('click', function() {
+                            cards.querySelectorAll('.option-card').forEach(function(b) { b.classList.remove('selected'); });
+                            btn.classList.add('selected');
+                            selected = opt.name;
+                        });
+                        cards.appendChild(btn);
+                    });
+                    wrap.appendChild(cards);
+                    control.getValue = function() { return selected || ''; };
+                    control.isValid  = function() { return !field.required || !!selected; };
+
+                } else {
+                    var input = document.createElement('input');
+                    input.className = 'form-input'; input.type = 'text';
+                    if (field.type === 'phone') {
+                        input.type = 'tel'; input.inputMode = 'numeric'; input.placeholder = '예: 010-1234-5678';
+                        input.addEventListener('input', function() { applyPhoneFormat(input); });
+                    } else if (field.type === 'date') {
+                        input.inputMode = 'numeric'; input.placeholder = '예: 990101'; input.maxLength = 8;
+                        input.addEventListener('input', function() { applyDateFormat(input); });
+                    } else if (field.type === 'number') {
+                        input.inputMode = 'numeric';
+                        input.addEventListener('input', function() { input.value = input.value.replace(/[^0-9]/g, ''); });
+                    }
+                    wrap.appendChild(input);
+                    control.getValue = function() { return input.value.trim(); };
+                    control.isValid  = function() { return !field.required || !!input.value.trim(); };
+                }
+
+                containerEl.appendChild(wrap);
+                controlsOut.push(control);
+            });
+        }
+
+        /** 컨트롤 배열 검증 → 첫 실패 필드명 반환 (없으면 null) */
+        function validateControls(controls) {
+            for (var i = 0; i < controls.length; i++) {
+                if (!controls[i].isValid()) return controls[i].name;
+            }
+            return null;
+        }
+        /** 컨트롤 배열 → { 필드명: 값 } 객체로 수집 */
+        function collectValues(controls) {
+            var out = {};
+            controls.forEach(function(c) { out[c.name] = c.getValue(); });
+            return out;
+        }
+
         /* ── 화면 전환 ── */
         function resetForm(screenId) {
             var sc = document.getElementById(screenId);
-            sc.querySelectorAll('input').forEach(function(el) { el.value = ''; });
+            sc.querySelectorAll('input[type=text], input[type=tel]').forEach(function(el) { el.value = ''; });
+            sc.querySelectorAll('input[type=checkbox]').forEach(function(el) { el.checked = false; });
             sc.querySelectorAll('select').forEach(function(el) { el.selectedIndex = 0; });
-            sc.querySelectorAll('.lunch-btn, .schedule-btn').forEach(function(b) { b.classList.remove('selected'); });
+            sc.querySelectorAll('.option-card').forEach(function(b) { b.classList.remove('selected'); });
+            sc.querySelectorAll('.counter-value').forEach(function(v) {
+                // 카운터는 초기 min값으로 되돌리기보단 렌더링을 다시 하는 편이 안전
+            });
+            if (screenId === 's-checkin') renderFields(document.getElementById('ci-fields'), CHECKIN_FIELDS, ciControls);
+            if (screenId === 's-register') renderFields(document.getElementById('re-fields'), REGISTER_FIELDS, reControls);
         }
 
         function goTo(id) {
@@ -440,17 +556,17 @@
         }
 
         /* ── QR 결과 색상 테이블 ──────────────────────────────────
-           출석체크 (신규)   노랑  #FEE500
-           출석체크 (중복)   주황  #f97316
+           참석확인 (신규)   초록  #22c55e
+           참석확인 (중복)   주황  #FEE500
            현장신청          파랑  #60a5fa
            미신청/비조합원   빨강  #ef4444
            ──────────────────────────────────────────────────────── */
         var QR_STYLES = {
-            checkin_new: { titleColor: '#15803d', cardBorder: '#22c55e' },  // 노랑 - 신규
-            checkin_dup: { titleColor: '#92700a', cardBorder: '#FEE500' },  // 초록 - 중복
-            onsite:      { titleColor: '#1d4ed8', cardBorder: '#60a5fa' },  // 파랑 - 현장신청
-            nosub:       { titleColor: '#dc2626', cardBorder: '#ef4444' },  // 빨강 - 미신청
-            nomem:       { titleColor: '#dc2626', cardBorder: '#ef4444' },  // 빨강 - 비조합원
+            checkin_new: { titleColor: '#15803d', cardBorder: '#22c55e' },
+            checkin_dup: { titleColor: '#92700a', cardBorder: '#FEE500' },
+            onsite:      { titleColor: '#1d4ed8', cardBorder: '#60a5fa' },
+            nosub:       { titleColor: '#dc2626', cardBorder: '#ef4444' },
+            nomem:       { titleColor: '#dc2626', cardBorder: '#ef4444' },
         };
 
         /* ── 결과 처리 ── */
@@ -481,15 +597,21 @@
         function submitCheckIn() {
             var corp  = document.getElementById('ci-corp').value.trim();
             var phone = document.getElementById('ci-phone').value.replace(/[^0-9]/g, '');
-            var lunch = document.getElementById('ci-lunch').value;
             if (!corp)             { alert('법인을 선택해 주세요.'); return; }
             if (phone.length < 10) { alert('전화번호를 올바르게 입력해 주세요.'); return; }
-            if (ENABLE_MEAL && !lunch) { alert(MEAL_LABEL + ' 식사 여부를 선택해 주세요.'); return; }
+
+            var invalidField = validateControls(ciControls);
+            if (invalidField) { alert(invalidField + ' 항목을 입력해 주세요.'); return; }
+
+            if (CHECKIN_FIELDS.length > 0 && !document.getElementById('ci-consent').checked) {
+                alert('개인정보 수집·이용에 동의해 주세요.'); return;
+            }
+
             setLoading(true);
             fetch('/api/checkin', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ corp: corp, phone: phone, lunch: lunch })
+                body: JSON.stringify({ corp: corp, phone: phone, fields: collectValues(ciControls) })
             })
                 .then(function(r) { return r.json(); })
                 .then(function(res) { setLoading(false); handleResult(res); })
@@ -498,25 +620,26 @@
 
         /* ── 현장신청 제출 → POST /api/register ── */
         function submitRegister() {
-            var corp     = document.getElementById('re-corp').value.trim();
-            var ldap     = document.getElementById('re-ldap').value.trim();
-            var name     = document.getElementById('re-name').value.trim();
-            var phone    = document.getElementById('re-phone').value.replace(/[^0-9]/g, '');
-            var lunch    = document.getElementById('re-lunch').value;
-            var schedEl  = document.getElementById('re-schedule');
-            var schedule = schedEl ? schedEl.value : '';
+            var corp  = document.getElementById('re-corp').value.trim();
+            var ldap  = document.getElementById('re-ldap').value.trim();
+            var name  = document.getElementById('re-name').value.trim();
+            var phone = document.getElementById('re-phone').value.replace(/[^0-9]/g, '');
             if (!corp)             { alert('법인을 선택해 주세요.'); return; }
             if (!name)             { alert('이름을 입력해 주세요.'); return; }
             if (phone.length < 10) { alert('전화번호를 올바르게 입력해 주세요.'); return; }
-            if (ENABLE_MEAL && !lunch) { alert(MEAL_LABEL + ' 식사 여부를 선택해 주세요.'); return; }
-            if (ENABLE_SCHEDULE && SCHEDULE_OPTIONS && SCHEDULE_OPTIONS.length > 0 && !schedule) {
-                alert('참여 일정을 선택해 주세요.'); return;
+
+            var invalidField = validateControls(reControls);
+            if (invalidField) { alert(invalidField + ' 항목을 입력해 주세요.'); return; }
+
+            if (!document.getElementById('re-consent').checked) {
+                alert('개인정보 수집·이용에 동의해 주세요.'); return;
             }
+
             setLoading(true);
             fetch('/api/register', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ corp: corp, ldap: ldap, name: name, phone: phone, schedule: schedule, lunch: lunch })
+                body: JSON.stringify({ corp: corp, ldap: ldap, name: name, phone: phone, fields: collectValues(reControls) })
             })
                 .then(function(r) { return r.json(); })
                 .then(function(res) { setLoading(false); handleResult(res); })

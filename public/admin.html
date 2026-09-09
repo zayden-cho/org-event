@@ -56,13 +56,20 @@
         .admin-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
         .admin-title{font-size:16px;font-weight:700;color:var(--text2)}
         .admin-logout{font-size:12px;color:var(--text3);cursor:pointer;background:none;border:none;font-family:var(--font);padding:4px 8px}
-        .cache-bar{display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--surface);border-radius:var(--r);margin-bottom:16px;border:1px solid var(--border)}
+        .cache-bar{display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--surface);border-radius:var(--r);margin-bottom:10px;border:1px solid var(--border)}
         .cache-status{font-size:12px;color:var(--text3);flex:1}
         .cache-status strong{color:var(--text2)}
         .cache-btn{font-size:12px;font-weight:700;font-family:var(--font);padding:6px 12px;border-radius:8px;border:none;cursor:pointer;background:var(--accent);color:#000;white-space:nowrap;transition:opacity .15s}
         .cache-btn:active{opacity:.8}
         .cache-btn.loading{opacity:.5;cursor:not-allowed}
         .admin-logout:active{color:var(--text2)}
+
+        .result-bar{display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--surface);border-radius:var(--r);margin-bottom:16px;border:1px solid var(--border)}
+        .result-status{font-size:12px;color:var(--text3);flex:1;line-height:1.6}
+        .result-status strong{color:var(--text2)}
+        .result-btn{font-size:12px;font-weight:700;font-family:var(--font);padding:6px 12px;border-radius:8px;border:1.5px solid var(--accent);cursor:pointer;background:transparent;color:var(--accent);white-space:nowrap;transition:opacity .15s}
+        .result-btn:active{opacity:.8}
+        .result-btn.loading{opacity:.5;cursor:not-allowed}
 
         .scanner-label{font-size:12px;font-weight:600;color:var(--text3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:12px}
         #qr-reader{width:100%;border-radius:20px;overflow:hidden;background:#000;margin-bottom:16px}
@@ -100,10 +107,10 @@
         .result-corp{font-size:14px;color:var(--text2)}
 
         .result-fields{padding:8px 0}
-        .result-field{display:flex;align-items:center;padding:12px 20px;border-bottom:1px solid var(--border)}
+        .result-field{display:flex;align-items:flex-start;gap:12px;padding:12px 20px;border-bottom:1px solid var(--border)}
         .result-field:last-of-type{border-bottom:none}
-        .field-key{font-size:12px;color:var(--text3);width:52px;flex-shrink:0}
-        .field-val{font-size:15px;font-weight:700;color:var(--text)}
+        .field-key{font-size:12px;color:var(--text3);min-width:64px;flex-shrink:0;padding-top:2px}
+        .field-val{font-size:15px;font-weight:700;color:var(--text);text-align:right;flex:1;word-break:keep-all}
 
         .special-card{display:none;border-radius:20px;overflow:hidden;margin-bottom:12px;animation:fadeIn .2s ease}
         .special-card-inner{padding:28px 24px;text-align:center}
@@ -148,6 +155,10 @@
             <div class="cache-status" id="cache-status">캐시 상태 확인 중...</div>
             <button class="cache-btn" id="cache-btn">응답 캐시 갱신</button>
         </div>
+        <div class="result-bar">
+            <div class="result-status" id="result-status">결과 시트는 필요할 때 눌러서 계산해요</div>
+            <button class="result-btn" id="result-btn">결과 시트 생성/갱신</button>
+        </div>
         <div class="scanner-label">QR 코드 스캔</div>
         <div id="qr-reader"></div>
         <div class="scanner-status" id="scanner-status">카메라를 QR 코드에 가져다 대주세요</div>
@@ -188,7 +199,6 @@
     (function() {
         var _pin        = '';
         var _scanner    = null, _scanning = false, _processing = false;
-        var _enableMeal = false, _enableSchedule = false;
 
         var pinWrap      = document.getElementById('pin-wrap');
         var pinInput     = document.getElementById('pin-input');
@@ -245,7 +255,7 @@
                         var kvInfo = res.kvStatus !== 'KV 미설정'
                             ? ' | KV: ' + res.kvStatus + ' (' + res.kvCount + '건)'
                             : ' | KV 미설정';
-                        statusEl.innerHTML = '응답캐시: <strong>' + res.responseCount + '건</strong> | 출석캐시: <strong>' + res.attendCacheCount + '건</strong>' + kvInfo;
+                        statusEl.innerHTML = '응답캐시: <strong>' + res.responseCount + '건</strong> | 참석확인캐시: <strong>' + res.checkinCacheCount + '건</strong>' + kvInfo;
                     }
                 })
                 .catch(function() { statusEl.textContent = '상태 확인 실패'; });
@@ -271,7 +281,33 @@
                 });
         });
 
-        /* ── PIN 확인 + FEATURES 수신 (1번 요청으로 처리) ── */
+        /* ── 결과 시트 온디맨드 재계산 ── */
+        document.getElementById('result-btn').addEventListener('click', function() {
+            var btn = document.getElementById('result-btn');
+            var statusEl = document.getElementById('result-status');
+            btn.classList.add('loading'); btn.textContent = '계산 중...';
+            callAPI('buildResult', { pin: _pin })
+                .then(function(res) {
+                    btn.classList.remove('loading'); btn.textContent = '결과 시트 생성/갱신';
+                    if (res.status === 'ok') {
+                        var c = res.counts || {};
+                        statusEl.innerHTML = '결과 시트 갱신 완료 (총 ' + res.count + '명) — '
+                            + '출석 <strong>' + (c['출석'] || 0) + '</strong> · '
+                            + '노쇼 <strong>' + (c['노쇼'] || 0) + '</strong> · '
+                            + '현장참여 <strong>' + (c['현장참여'] || 0) + '</strong> · '
+                            + '사전취소 <strong>' + (c['사전취소'] || 0) + '</strong> · '
+                            + '당일취소 <strong>' + (c['당일취소'] || 0) + '</strong>';
+                    } else {
+                        alert('결과 시트 계산 실패: ' + res.message);
+                    }
+                })
+                .catch(function() {
+                    btn.classList.remove('loading'); btn.textContent = '결과 시트 생성/갱신';
+                    alert('결과 시트 계산 요청 실패');
+                });
+        });
+
+        /* ── PIN 확인 (1번 요청으로 처리) ── */
         function verifyPin() {
             var pin = pinInput.value.trim();
             if (!pin) { pinError.textContent = 'PIN을 입력해 주세요.'; return; }
@@ -280,9 +316,7 @@
                 .then(function(res) {
                     setLoading(false);
                     if (res.status === 'ok') {
-                        _pin            = pin;
-                        _enableMeal     = res.enableMeal     === true;
-                        _enableSchedule = res.enableSchedule === true;
+                        _pin = pin;
                         pinWrap.style.display     = 'none';
                         scannerWrap.style.display = 'flex';
                         startScanner();
@@ -341,7 +375,9 @@
             startScanner();
         }
 
-        /* ── 결과 표시 ── */
+        /* ── 결과 표시 ──
+           res.fields: [{label, value}] — 법인/LDAP/이름/전화번호 기본골격을 제외한
+           동적 이벤트 필드 + 커스텀 필드 + 조합원여부 전부를 그대로 순회해서 표시 */
         function showResult(res) {
             if (res.status === 'error' || res.status === 'unauthorized') {
                 showScanError(res.message || '오류가 발생했습니다.');
@@ -386,26 +422,20 @@
             statusText.style.color       = b.text;
             statusText.textContent       = b.label;
 
-            var timeVal = res.checkedAt || res.registeredAt || '-';
-            resultTime.textContent = timeVal ? timeVal + ' 접수' : '-';
+            resultTime.textContent = res.timeStamp && res.timeStamp !== '-' ? res.timeStamp + ' 접수' : '-';
             resultName.textContent = res.name || '-';
             resultCorp.textContent = res.corp || '-';
 
             var fields = [];
-            if (res.ldap && res.ldap !== '-' && res.ldap !== '') fields.push({ key:'LDAP', val:res.ldap });
-            fields.push({ key:'전화', val:res.phone || '-' });
-            if (res.type === 'CHECKIN') fields.push({ key:'신청', val:res.regStatus || '-' });
-            if (_enableMeal) fields.push({ key:'식사', val:res.lunch || '-' });
-            if (_enableSchedule && res.schedule && res.schedule !== '-' && res.schedule !== 'undefined') {
-                fields.push({ key:'일정', val:res.schedule });
-            }
-            if (res.memberStatus) fields.push({ key:'구분', val:res.memberStatus });
+            if (res.ldap && res.ldap !== '-' && res.ldap !== '') fields.push({ label: 'LDAP', value: res.ldap });
+            fields.push({ label: '전화', value: res.phone || '-' });
+            (res.fields || []).forEach(function(f) { fields.push(f); });
 
             resultFields.innerHTML = fields.map(function(f, i) {
                 var last = i === fields.length - 1 ? ' style="border-bottom:none"' : '';
                 return '<div class="result-field"' + last + '>'
-                    + '<span class="field-key">' + f.key + '</span>'
-                    + '<span class="field-val">' + f.val + '</span>'
+                    + '<span class="field-key">' + f.label + '</span>'
+                    + '<span class="field-val">' + f.value + '</span>'
                     + '</div>';
             }).join('');
 

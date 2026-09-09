@@ -4,28 +4,18 @@ import {
     preloadResponseCache,
     invalidateCache,
     getCacheStatus,
+    buildResultSheet,
 } from '../_shared/logic.js';
-import { FEATURES } from '../_shared/settings.js';
 
 export async function onRequestPost(context) {
     try {
-        const body   = await context.request.json();
+        const body = await context.request.json();
         const { action, pin } = body;
 
         let result;
 
         if (action === 'verifyAndConfig') {
-            const verify = adminVerifyPin(context.env, pin);
-            if (verify.status !== 'ok') {
-                result = verify;
-            } else {
-                result = {
-                    status:         'ok',
-                    enableMeal:     FEATURES.enableMeal,
-                    mealLabel:      FEATURES.mealLabel,
-                    enableSchedule: FEATURES.enableSchedule,
-                };
-            }
+            result = adminVerifyPin(context.env, pin);
 
         } else if (action === 'scanQR') {
             result = await adminScanQR(context.env, body.qr, pin);
@@ -35,18 +25,20 @@ export async function onRequestPost(context) {
             result = await getCacheStatus(context.env);
 
         } else if (action === 'preloadCache') {
-            /* 응답 캐시 강제 갱신 */
             const verify = adminVerifyPin(context.env, pin);
-            const verify2 = adminVerifyPin(context.env, pin);
-            if (verify2.status !== 'ok') return Response.json(verify2);
+            if (verify.status !== 'ok') return Response.json(verify);
             result = await preloadResponseCache(context.env);
 
         } else if (action === 'invalidateCache') {
-            /* 캐시 초기화 */
             const verify = adminVerifyPin(context.env, pin);
-            const verify3 = adminVerifyPin(context.env, pin);
-            if (verify3.status !== 'ok') return Response.json(verify3);
+            if (verify.status !== 'ok') return Response.json(verify);
             result = await invalidateCache(context.env);
+
+        } else if (action === 'buildResult') {
+            /* 결과 시트 온디맨드 재계산 (응답 vs 참석확인 diff + 현장신청 조합원매칭분) */
+            const verify = adminVerifyPin(context.env, pin);
+            if (verify.status !== 'ok') return Response.json(verify);
+            result = await buildResultSheet(context.env);
 
         } else {
             result = { status: 'error', message: '알 수 없는 요청입니다.' };

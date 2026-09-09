@@ -61,6 +61,19 @@ export async function updateCell(token, sheetId, range, value) {
     return req(token, url, { method: 'PUT', body: JSON.stringify({ values: [[value]] }) });
 }
 
+/** 여러 행/열을 한 번에 덮어쓰기 (RAW) — 결과 시트 재계산처럼
+ 기존 값을 새 값으로 통째로 갈아끼울 때 사용 */
+export async function setValues(token, sheetId, range, values2D) {
+    const url = `${BASE}/${sheetId}/values/${encodeURIComponent(range)}?valueInputOption=RAW`;
+    return req(token, url, { method: 'PUT', body: JSON.stringify({ values: values2D }) });
+}
+
+/** 범위 값 삭제 (헤더는 남기고 데이터 영역만 비울 때 사용) */
+export async function clearValues(token, sheetId, range) {
+    const url = `${BASE}/${sheetId}/values/${encodeURIComponent(range)}:clear`;
+    return req(token, url, { method: 'POST', body: JSON.stringify({}) });
+}
+
 /* ── 헤더 맵 (캐시 우선) ────────────────────────────────── */
 
 /** 헤더 이름 → 0-based 인덱스 맵 (캐시) */
@@ -93,30 +106,8 @@ export function colLetter(idx) {
 
 /* ── 검색 ──────────────────────────────────────────────── */
 
-/** 전화번호 컬럼만 읽어 매칭 행 반환 (최적화)
- - _getLastRow 호출 없이 오픈형 범위로 전체 컬럼 읽기
- - 매칭 시 해당 행만 추가 1회 조회
- - extraCheck(rowValues): 법인 등 추가 조건 */
-export async function findRowByPhone(token, sheetId, sheetName, phoneColIdx, phoneNorm, extraCheck) {
-    if (phoneColIdx == null) return null;
-
-    const col    = colLetter(phoneColIdx);
-    /* 오픈형 범위 → _getLastRow API 호출 불필요 */
-    const phones = await getValues(token, sheetId, `${sheetName}!${col}2:${col}`);
-
-    for (let i = 0; i < phones.length; i++) {
-        const cell = String((phones[i] || [])[0] || '').replace(/[^0-9]/g, '');
-        if (cell === phoneNorm) {
-            const rowNum    = i + 2;
-            const rowValues = (await getValues(token, sheetId, `${sheetName}!A${rowNum}:Z${rowNum}`))[0] || [];
-            if (!extraCheck || extraCheck(rowValues)) return { rowNum, values: rowValues };
-            /* 전화번호 일치 but 추가 조건 불일치 → 계속 */
-        }
-    }
-    return null;
-}
-
-/** Index 컬럼에서 qrId 검색 (오픈형 범위) */
+/** 지정 컬럼에서 값 검색 (오픈형 범위)
+ 참석확인/현장신청 시트 모두 Index 컬럼 기준으로 공용 사용 */
 export async function findRowByIndex(token, sheetId, sheetName, indexColIdx, qrId) {
     if (indexColIdx == null) return null;
 
@@ -159,12 +150,10 @@ export async function ensureSheet(token, sheetId, sheetName, headers) {
         const rows = await getValues(token, sheetId, `${sheetName}!1:1`);
         if (!rows[0] || !rows[0].some(v => String(v).trim())) {
             await appendRow(token, sheetId, sheetName, headers);
-            /* 방금 만든 헤더로 캐시 적재 */
             const map = {};
             headers.forEach((h, i) => { const k = String(h).trim(); if (k) map[k] = i; });
             _headerCache.set(key, map);
         } else {
-            /* 기존 헤더로 캐시 적재 */
             const map = {};
             rows[0].forEach((h, i) => { const k = String(h).trim(); if (k) map[k] = i; });
             _headerCache.set(key, map);
