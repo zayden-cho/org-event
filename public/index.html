@@ -145,10 +145,10 @@
 
         /* 개인정보 수집·이용 동의 */
         .consent-box {
-            display:flex; align-items:flex-start; gap:12px; padding:16px;
+            display:flex; align-items:center; gap:12px; padding:16px;
             background:var(--surface); border:1.5px solid var(--accent); border-radius:var(--r); margin-bottom:18px;
         }
-        .consent-checkbox { width:22px; height:22px; flex-shrink:0; margin-top:1px; accent-color:var(--accent); }
+        .consent-checkbox { width:22px; height:22px; flex-shrink:0; accent-color:var(--accent); }
         .consent-text { font-size:13px; color:var(--text2); line-height:1.6; }
 
         .btn {
@@ -461,7 +461,12 @@
                         Object.keys(counters).forEach(function(k) { out[k] = counters[k].textContent; });
                         return out;
                     };
-                    control.isValid = function() { return true; };
+                    control.isValid  = function() { return true; };
+                    control.hasValue = function() {
+                        return (field.options || []).some(function(opt) {
+                            return parseInt(counters[opt.name].textContent, 10) !== (opt.min || 0);
+                        });
+                    };
 
                 } else if (field.type === 'select') {
                     var cards = document.createElement('div'); cards.className = 'option-cards';
@@ -480,6 +485,7 @@
                     wrap.appendChild(cards);
                     control.getValue = function() { return selected || ''; };
                     control.isValid  = function() { return !field.required || !!selected; };
+                    control.hasValue = function() { return !!selected; };
 
                 } else {
                     var input = document.createElement('input');
@@ -497,6 +503,7 @@
                     wrap.appendChild(input);
                     control.getValue = function() { return input.value.trim(); };
                     control.isValid  = function() { return !field.required || !!input.value.trim(); };
+                    control.hasValue = function() { return !!input.value.trim(); };
                 }
 
                 containerEl.appendChild(wrap);
@@ -516,6 +523,11 @@
             var out = {};
             controls.forEach(function(c) { out[c.name] = c.getValue(); });
             return out;
+        }
+        /** 필수 필드가 하나라도 있거나, 선택 필드라도 실제로 값이 입력된 게 있으면
+         이번 제출에서 개인정보가 실제로 넘어가는 것이므로 동의가 필요함 */
+        function needsConsent(controls) {
+            return controls.some(function(c) { return c.required || c.hasValue(); });
         }
 
         /* ── 화면 전환 ── */
@@ -603,7 +615,7 @@
             var invalidField = validateControls(ciControls);
             if (invalidField) { alert(invalidField + ' 항목을 입력해 주세요.'); return; }
 
-            if (CHECKIN_FIELDS.length > 0 && !document.getElementById('ci-consent').checked) {
+            if (needsConsent(ciControls) && !document.getElementById('ci-consent').checked) {
                 alert('개인정보 수집·이용에 동의해 주세요.'); return;
             }
 
