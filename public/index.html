@@ -362,12 +362,13 @@
                 sub.textContent = '현재 현장 신청이 마감되었어요';
             }
 
-            /* 커스텀/동적 필드 렌더링 */
-            renderFields(document.getElementById('ci-fields'), CHECKIN_FIELDS, ciControls);
+            /* 커스텀/동적 필드 렌더링
+               참석확인 화면은 값이 실제로 채워질 때만 동의 박스를 보여줘야 하므로
+               onChange 콜백을 넘겨서 입력이 바뀔 때마다 노출 여부를 다시 계산 */
+            renderFields(document.getElementById('ci-fields'), CHECKIN_FIELDS, ciControls, updateConsentVisibility);
             renderFields(document.getElementById('re-fields'), REGISTER_FIELDS, reControls);
 
-            /* 참석확인 화면은 커스텀 필드가 있을 때만 동의 노출 */
-            document.getElementById('ci-consent-wrap').style.display = CHECKIN_FIELDS.length > 0 ? 'flex' : 'none';
+            updateConsentVisibility();
 
             /* 이벤트 바인딩 */
             document.getElementById('btn-checkin').addEventListener('click', function() { goTo('checkin'); });
@@ -405,7 +406,7 @@
 
         /* ── 필드 렌더링 (필드설정/필드옵션 기반, 완전 동적) ──
            입력방식: text / phone / date / number / counter-group / select */
-        function renderFields(containerEl, fieldList, controlsOut) {
+        function renderFields(containerEl, fieldList, controlsOut, onChange) {
             if (!containerEl) return;
             containerEl.innerHTML = '';
             controlsOut.length = 0;
@@ -449,9 +450,11 @@
                         row.querySelector('.counter-minus').addEventListener('click', function() {
                             var v = parseInt(valEl.textContent, 10);
                             if (v > min) valEl.textContent = String(v - 1);
+                            if (onChange) onChange();
                         });
                         row.querySelector('.counter-plus').addEventListener('click', function() {
                             valEl.textContent = String(parseInt(valEl.textContent, 10) + 1);
+                            if (onChange) onChange();
                         });
                         counters[opt.name] = valEl;
                     });
@@ -479,6 +482,7 @@
                             cards.querySelectorAll('.option-card').forEach(function(b) { b.classList.remove('selected'); });
                             btn.classList.add('selected');
                             selected = opt.name;
+                            if (onChange) onChange();
                         });
                         cards.appendChild(btn);
                     });
@@ -500,6 +504,7 @@
                         input.inputMode = 'numeric';
                         input.addEventListener('input', function() { input.value = input.value.replace(/[^0-9]/g, ''); });
                     }
+                    input.addEventListener('input', function() { if (onChange) onChange(); });
                     wrap.appendChild(input);
                     control.getValue = function() { return input.value.trim(); };
                     control.isValid  = function() { return !field.required || !!input.value.trim(); };
@@ -529,6 +534,13 @@
         function needsConsent(controls) {
             return controls.some(function(c) { return c.required || c.hasValue(); });
         }
+        /** 참석확인 동의 박스: 필요할 때만 보여주고, 다시 필요없어지면 숨기면서 체크도 초기화 */
+        function updateConsentVisibility() {
+            var wrap = document.getElementById('ci-consent-wrap');
+            var need = needsConsent(ciControls);
+            wrap.style.display = need ? 'flex' : 'none';
+            if (!need) document.getElementById('ci-consent').checked = false;
+        }
 
         /* ── 화면 전환 ── */
         function resetForm(screenId) {
@@ -540,7 +552,10 @@
             sc.querySelectorAll('.counter-value').forEach(function(v) {
                 // 카운터는 초기 min값으로 되돌리기보단 렌더링을 다시 하는 편이 안전
             });
-            if (screenId === 's-checkin') renderFields(document.getElementById('ci-fields'), CHECKIN_FIELDS, ciControls);
+            if (screenId === 's-checkin') {
+                renderFields(document.getElementById('ci-fields'), CHECKIN_FIELDS, ciControls, updateConsentVisibility);
+                updateConsentVisibility();
+            }
             if (screenId === 's-register') renderFields(document.getElementById('re-fields'), REGISTER_FIELDS, reControls);
         }
 
