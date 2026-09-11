@@ -15,16 +15,31 @@
      · 커스텀 필드     : 응답 시트엔 없는, 참석확인/현장신청
                           시점에 신규로 입력받는 필드
                           (생년월일, 1365포털ID 등).
+     · 반복 입력 필드  : 커스텀 필드의 한 종류. "같은 화면에 있는 다른
+                          인원 카운터/숫자 필드"의 값(=인원수)만큼 하위
+                          입력 블록이 통째로 반복된다 (예: 참석 인원이
+                          2명이면 "생년월일/1365포털ID" 세트가 2번 반복).
+                          시트에는 "옵션명(1)", "옵션명(2)"... 처럼
+                          사람 순번을 붙인 컬럼으로 펼쳐서 저장된다.
+                          ⚠ 반복 기준 필드는 반드시 그 화면에 실제로 입력
+                          UI가 보이는 필드여야 한다 — 동적 필드(예: 참여인원)는
+                          참석확인 화면엔 UI가 없어 기준으로 쓸 수 없다.
      · 두 종류 모두 "필드설정" 시트에 필드명으로 등록되어 있어야
        폼에 입력 UI가 생긴다 (동적 필드는 보통 "현장신청 때만").
        등록이 안 된 동적 필드는 참석확인 시 복사는 되지만,
        현장신청 폼에는 노출되지 않는다.
    ─────────────────────────────────────────────────────────────
    필드설정 시트 컬럼:
-     필드명 / 입력방식 / 어디서 받나요 / 필수 여부
-     / 제목 옆 설명 / 하단 안내 박스 / 표시 순서
-   필드옵션 시트 컬럼 (입력방식이 "인원 카운터" / "선택 카드"인 경우만):
-     필드명 / 옵션명 / 옵션 설명 / 최소값 / 표시 순서
+     필드명 / 입력방식 / 어디서 받나요 / 필수 여부 / 제목 옆 설명
+     / 하단 안내 박스 / 표시 순서 / 반복 기준 필드 / 최대 인원
+     / 결과 시트에 인원으로 반영
+     (반복 기준 필드·최대 인원은 입력방식이 "반복 입력"인 경우만 사용.
+      결과 시트에 인원으로 반영은 "예"/"아니오" — 인원 카운터형 필드에만
+      의미 있으며, 보통 참석확인용/현장신청용 각 1개씩 "예"로 표시)
+   필드옵션 시트 컬럼:
+     필드명 / 옵션명 / 옵션 설명 / 최소값 / 표시 순서 / 옵션 입력방식
+     ("인원 카운터"는 최소값을, "반복 입력"은 옵션 입력방식을 사용.
+      "선택 카드"는 둘 다 비워도 됨)
    ─────────────────────────────────────────────────────────────*/
 
 import { getValues, getHeaderMap } from './sheets.js';
@@ -42,6 +57,7 @@ const INPUT_TYPE_MAP = {
     '숫자':          'number',
     '인원 카운터':   'counter-group',
     '선택 카드':     'select',
+    '반복 입력':     'repeat',
 };
 
 const SCOPE_MAP = {
@@ -78,15 +94,15 @@ export async function getFieldDefinitions(token, sheetId) {
     let optionRows  = [];
     try {
         [settingRows, optionRows] = await Promise.all([
-            getValues(token, sheetId, `${FIELD_SHEET_NAME}!A3:G`),
-            getValues(token, sheetId, `${OPTION_SHEET_NAME}!A3:E`),
+            getValues(token, sheetId, `${FIELD_SHEET_NAME}!A3:J`),
+            getValues(token, sheetId, `${OPTION_SHEET_NAME}!A3:F`),
         ]);
     } catch {
         /* 필드설정/필드옵션 탭이 아직 없는 행사 → 커스텀 필드 없이 진행 */
         return [];
     }
 
-    const options = {}; // 필드명 -> [{name, desc, min, order}]
+    const options = {}; // 필드명 -> [{name, desc, min, order, type}]
     (optionRows || []).forEach(row => {
         const fieldName = String(row[0] || '').trim();
         const optName   = String(row[1] || '').trim();
@@ -97,6 +113,8 @@ export async function getFieldDefinitions(token, sheetId) {
             desc:  String(row[2] || '').trim(),
             min:   row[3] !== undefined && row[3] !== '' ? Number(row[3]) || 0 : 0,
             order: row[4] !== undefined && row[4] !== '' ? Number(row[4]) || 0 : options[fieldName].length,
+            /* "반복 입력" 타입 필드의 하위 항목에서만 사용 (그 외 타입은 무시됨) */
+            type:  INPUT_TYPE_MAP[String(row[5] || '').trim()] || 'text',
         });
     });
     Object.values(options).forEach(list => list.sort((a, b) => a.order - b.order));
@@ -107,13 +125,24 @@ export async function getFieldDefinitions(token, sheetId) {
             const name = String(row[0] || '').trim();
             return {
                 name,
-                type:     INPUT_TYPE_MAP[String(row[1] || '').trim()] || 'text',
-                scope:    SCOPE_MAP[String(row[2] || '').trim()]      || 'both',
-                required: REQUIRED_MAP[String(row[3] || '').trim()]  ?? false,
-                sideNote: String(row[4] || '').trim(),
-                helpNote: String(row[5] || '').trim(),
-                order:    row[6] !== undefined && row[6] !== '' ? Number(row[6]) || 0 : 0,
-                options:  options[name] || [],
+                type:         INPUT_TYPE_MAP[String(row[1] || '').trim()] || 'text',
+                scope:        SCOPE_MAP[String(row[2] || '').trim()]      || 'both',
+                required:     REQUIRED_MAP[String(row[3] || '').trim()]  ?? false,
+                sideNote:     String(row[4] || '').trim(),
+                helpNote:     String(row[5] || '').trim(),
+                order:        row[6] !== undefined && row[6] !== '' ? Number(row[6]) || 0 : 0,
+                /* "반복 입력" 타입 전용 — 이 필드의 값 개수를 결정하는, 같은 화면에 있는
+                   인원 카운터/숫자 필드의 이름. 그 필드가 응답시트 헤더와 일치하는
+                   동적 필드면(예: "참여인원") 참석확인 화면엔 UI가 없어 개수를 알 수 없으므로,
+                   반복 기준 필드는 항상 참석확인/현장신청 화면에 실제로 노출되는
+                   커스텀 필드로 지정해야 한다 */
+                repeatSource: String(row[7] || '').trim(),
+                repeatMax:    row[8] !== undefined && row[8] !== '' ? Number(row[8]) || 5 : 5,
+                /* "예"로 표시된 필드(보통 인원 카운터)의 값이 결과 시트 "인원수" 컬럼의
+                   출처가 된다. 참석확인용/현장신청용 각 1개씩 지정하는 걸 전제로 함 —
+                   둘 다 "예"로 표시해두면 화면마다 실제 존재하는 컬럼 쪽이 자동으로 쓰인다 */
+                countsAsAttendance: String(row[9] || '').trim() === '예',
+                options:      options[name] || [],
             };
         })
         .sort((a, b) => a.order - b.order);
@@ -174,11 +203,33 @@ export function assignFieldValue(valuesByHeader, name, value) {
     }
 }
 
+/** "반복 입력" 필드 전용 값 대입. people은 [{옵션명: 값}, ...] 형태의 배열
+ (i번째 참여자 = people[i]). repeatMax를 넘는 인원은 무시하고,
+ people보다 슬롯이 남으면 빈 값으로 채워 컬럼을 항상 고정 개수로 유지한다 */
+export function assignRepeatFieldValue(valuesByHeader, fieldDef, people) {
+    const max = fieldDef.repeatMax || 5;
+    for (let i = 0; i < max; i++) {
+        const person = (people || [])[i] || {};
+        fieldDef.options.forEach(opt => {
+            valuesByHeader[`${opt.name}(${i + 1})`] = person[opt.name] ?? '';
+        });
+    }
+}
+
 /** 커스텀 필드 정의 하나가 실제로 차지하는 시트 헤더 목록
  (인원 카운터처럼 옵션이 있으면 옵션별로 펼쳐짐) */
 export function fieldDefHeaders(fieldDef) {
     if (fieldDef.type === 'counter-group' && fieldDef.options.length) {
         return fieldDef.options.map(o => `${fieldDef.name}(${o.name})`);
+    }
+    if (fieldDef.type === 'repeat' && fieldDef.options.length) {
+        /* 사람 단위(person-major)로 나열: 1번째 참여자의 모든 하위항목 → 2번째 참여자... */
+        const max = fieldDef.repeatMax || 5;
+        const headers = [];
+        for (let i = 1; i <= max; i++) {
+            fieldDef.options.forEach(o => headers.push(`${o.name}(${i})`));
+        }
+        return headers;
     }
     return [fieldDef.name];
 }

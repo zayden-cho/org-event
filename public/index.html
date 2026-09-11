@@ -143,6 +143,18 @@
         .option-card.selected span { color:rgba(255,255,255,.6); }
         .option-card:active { transform:scale(.97); }
 
+        /* 반복 입력 — 인원수만큼 하위 입력 블록이 늘어나는 필드 */
+        .repeat-list { display:flex; flex-direction:column; gap:12px; }
+        .repeat-block {
+            padding:16px; background:var(--surface); border:1.5px solid var(--border);
+            border-radius:var(--r); display:flex; flex-direction:column; gap:10px;
+        }
+        .repeat-block-title { font-size:12px; font-weight:800; color:var(--text3); letter-spacing:.03em; }
+        .repeat-sub-row { display:flex; flex-direction:column; gap:6px; }
+        .repeat-sub-label { font-size:12px; color:var(--text2); }
+        .repeat-sub-input { min-height:50px; }
+        .repeat-warn { display:none; font-size:12px; color:#dc2626; margin-top:8px; line-height:1.5; }
+
         /* 개인정보 수집·이용 동의 */
         .consent-box {
             display:flex; align-items:center; gap:12px; padding:16px;
@@ -411,6 +423,32 @@
             containerEl.innerHTML = '';
             controlsOut.length = 0;
 
+            /* 특정 컨트롤의 현재값을 "인원수"로 환산 (인원카운터=합계, 숫자=그대로) */
+            function sumControlValue(control) {
+                if (!control) return 0;
+                var v = control.getValue();
+                if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+                    return Object.keys(v).reduce(function(sum, k) { return sum + (parseInt(v[k], 10) || 0); }, 0);
+                }
+                return parseInt(v, 10) || 0;
+            }
+            /* 반복 입력 필드들을, 같은 화면의 반복 기준 필드 값에 맞춰 블록 개수 재동기화 */
+            function syncRepeats() {
+                controlsOut.forEach(function(c) {
+                    if (!c._setCount) return;
+                    var source = null;
+                    for (var i = 0; i < controlsOut.length; i++) {
+                        if (controlsOut[i].name === c._sourceName) { source = controlsOut[i]; break; }
+                    }
+                    c._setCount(sumControlValue(source));
+                });
+            }
+            /* 모든 입력 이벤트가 거치는 공용 핸들러: 반복 필드 동기화 → 상위 onChange(예: 동의 노출) */
+            function handleChange() {
+                syncRepeats();
+                if (onChange) onChange();
+            }
+
             fieldList.forEach(function(field) {
                 var wrap = document.createElement('div');
                 wrap.className = 'form-group';
@@ -450,11 +488,11 @@
                         row.querySelector('.counter-minus').addEventListener('click', function() {
                             var v = parseInt(valEl.textContent, 10);
                             if (v > min) valEl.textContent = String(v - 1);
-                            if (onChange) onChange();
+                            handleChange();
                         });
                         row.querySelector('.counter-plus').addEventListener('click', function() {
                             valEl.textContent = String(parseInt(valEl.textContent, 10) + 1);
-                            if (onChange) onChange();
+                            handleChange();
                         });
                         counters[opt.name] = valEl;
                     });
@@ -482,7 +520,7 @@
                             cards.querySelectorAll('.option-card').forEach(function(b) { b.classList.remove('selected'); });
                             btn.classList.add('selected');
                             selected = opt.name;
-                            if (onChange) onChange();
+                            handleChange();
                         });
                         cards.appendChild(btn);
                     });
@@ -490,6 +528,80 @@
                     control.getValue = function() { return selected || ''; };
                     control.isValid  = function() { return !field.required || !!selected; };
                     control.hasValue = function() { return !!selected; };
+
+                } else if (field.type === 'repeat') {
+                    var listEl = document.createElement('div'); listEl.className = 'repeat-list';
+                    var warnEl = document.createElement('div'); warnEl.className = 'repeat-warn';
+                    var blockEls  = []; // [{ el, data: {옵션명: 값} }, ...]
+                    var maxCount  = field.repeatMax || 5;
+
+                    function makeRepeatInput(opt) {
+                        var inp = document.createElement('input');
+                        inp.className = 'form-input repeat-sub-input'; inp.type = 'text';
+                        if (opt.type === 'phone') {
+                            inp.type = 'tel'; inp.inputMode = 'numeric'; inp.placeholder = '예: 010-1234-5678';
+                            inp.addEventListener('input', function() { applyPhoneFormat(inp); });
+                        } else if (opt.type === 'date') {
+                            inp.inputMode = 'numeric'; inp.placeholder = '예: 990101'; inp.maxLength = 8;
+                            inp.addEventListener('input', function() { applyDateFormat(inp); });
+                        } else if (opt.type === 'number') {
+                            inp.inputMode = 'numeric';
+                            inp.addEventListener('input', function() { inp.value = inp.value.replace(/[^0-9]/g, ''); });
+                        }
+                        return inp;
+                    }
+                    function makeBlock(personIdx) {
+                        var block = document.createElement('div'); block.className = 'repeat-block';
+                        var title = document.createElement('div'); title.className = 'repeat-block-title';
+                        title.textContent = (personIdx + 1) + '번째 참여자';
+                        block.appendChild(title);
+                        var data = {};
+                        (field.options || []).forEach(function(opt) {
+                            var row = document.createElement('div'); row.className = 'repeat-sub-row';
+                            var lab = document.createElement('div'); lab.className = 'repeat-sub-label';
+                            lab.textContent = opt.name + (opt.desc ? ' · ' + opt.desc : '');
+                            var inp = makeRepeatInput(opt);
+                            inp.addEventListener('input', function() { data[opt.name] = inp.value.trim(); handleChange(); });
+                            row.appendChild(lab); row.appendChild(inp);
+                            block.appendChild(row);
+                        });
+                        return { el: block, data: data };
+                    }
+                    function setCount(requested) {
+                        var clamped = Math.min(requested, maxCount);
+                        if (requested > maxCount) {
+                            warnEl.style.display = 'block';
+                            warnEl.textContent = '최대 ' + maxCount + '명까지만 반영돼요. 초과 인원은 운영진에게 별도로 안내해 주세요.';
+                        } else {
+                            warnEl.style.display = 'none';
+                        }
+                        while (blockEls.length < clamped) {
+                            var b = makeBlock(blockEls.length);
+                            listEl.appendChild(b.el);
+                            blockEls.push(b);
+                        }
+                        while (blockEls.length > clamped) {
+                            var removed = blockEls.pop();
+                            listEl.removeChild(removed.el);
+                        }
+                    }
+
+                    wrap.appendChild(listEl);
+                    wrap.appendChild(warnEl);
+                    control._setCount   = setCount;
+                    control._sourceName = field.repeatSource;
+                    control.getValue = function() { return blockEls.map(function(b) { return b.data; }); };
+                    control.isValid  = function() {
+                        if (!field.required) return true;
+                        return blockEls.every(function(b) {
+                            return (field.options || []).every(function(opt) { return !!b.data[opt.name]; });
+                        });
+                    };
+                    control.hasValue = function() {
+                        return blockEls.some(function(b) {
+                            return Object.keys(b.data).some(function(k) { return !!b.data[k]; });
+                        });
+                    };
 
                 } else {
                     var input = document.createElement('input');
@@ -504,7 +616,7 @@
                         input.inputMode = 'numeric';
                         input.addEventListener('input', function() { input.value = input.value.replace(/[^0-9]/g, ''); });
                     }
-                    input.addEventListener('input', function() { if (onChange) onChange(); });
+                    input.addEventListener('input', function() { handleChange(); });
                     wrap.appendChild(input);
                     control.getValue = function() { return input.value.trim(); };
                     control.isValid  = function() { return !field.required || !!input.value.trim(); };
@@ -514,6 +626,8 @@
                 containerEl.appendChild(wrap);
                 controlsOut.push(control);
             });
+
+            syncRepeats(); // 초기 렌더 시점의 반복 기준 필드 값으로 블록 개수 맞춤
         }
 
         /** 컨트롤 배열 검증 → 첫 실패 필드명 반환 (없으면 null) */

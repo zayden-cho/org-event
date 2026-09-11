@@ -27,8 +27,11 @@
                            / [동적 이벤트 필드(복사)] / [커스텀 필드] / Index / 운영진확인시간
      현장 (신청) 시트    : 현장신청시간 / 법인 / LDAP / 이름 / 전화번호
                            / [동적 이벤트 필드(신규입력)] / 조합원여부 / [커스텀 필드] / Index / 운영진확인시간
-     결과 시트           : 법인 / LDAP / 이름 / 전화번호 / Index / 상태
-                           (응답 vs 참석확인 Index diff + 현장신청 조합원매칭분, 온디맨드 재계산)
+     결과 시트           : 법인 / LDAP / 이름 / 전화번호 / Index / 인원수 / 상태
+                           (응답 vs 참석확인 Index diff + 현장신청 조합원매칭분, 온디맨드 재계산.
+                            인원수는 "결과 시트에 인원으로 반영"이 예로 표시된 필드의 합계값이며,
+                            그런 필드를 안 쓰는 행사는 신청 1건 = 신청자 본인 1명으로 간주해 항상 1.
+                            노쇼/사전취소/당일취소는 체크인 자체가 없어 인원수도 항상 빈칸)
    ─────────────────────────────────────────────────────────*/
 
 import { getAccessToken } from './auth.js';
@@ -43,7 +46,8 @@ import {
 } from './settings.js';
 import {
     getFieldDefinitions, getResponseDynamicGroups, extractDynamicValues,
-    assignFieldValue, fieldDefHeaders, dynamicGroupHeaders, buildDisplayFields,
+    assignFieldValue, assignRepeatFieldValue, fieldDefHeaders, dynamicGroupHeaders,
+    buildDisplayFields, parseGroupedHeader,
 } from './fields.js';
 
 /* ── 상수 ── */
@@ -84,6 +88,16 @@ function resultSheetName(env) {
 function customFieldsForScope(fieldDefs, dynamicNames, scope) {
     return fieldDefs.filter(f =>
         !dynamicNames.has(f.name) && (f.scope === scope || f.scope === 'both'));
+}
+
+/** 커스텀 필드 목록을 순회하며 valuesByHeader에 값 대입.
+ "반복 입력" 타입은 배열([{옵션명:값}, ...])이라 전용 헬퍼로, 나머지는 공용 헬퍼로 처리 */
+function applyCustomFieldValues(valuesByHeader, customFields, submittedValues) {
+    customFields.forEach(f => {
+        const v = (submittedValues || {})[f.name];
+        if (f.type === 'repeat') assignRepeatFieldValue(valuesByHeader, f, v);
+        else assignFieldValue(valuesByHeader, f.name, v);
+    });
 }
 
 /** 이번 행사의 필드 컨텍스트(필드정의 + 동적필드그룹)를 한 번에 로딩
@@ -270,12 +284,14 @@ export async function getFieldConfig(env) {
     const { fieldDefs, dynamicNames } = await _loadFieldContext(tk, env);
 
     const toClientField = (f) => ({
-        name:     f.name,
-        type:     f.type,
-        required: f.required,
-        sideNote: f.sideNote,
-        helpNote: f.helpNote,
-        options:  f.options.map(o => ({ name: o.name, desc: o.desc, min: o.min })),
+        name:         f.name,
+        type:         f.type,
+        required:     f.required,
+        sideNote:     f.sideNote,
+        helpNote:     f.helpNote,
+        repeatSource: f.repeatSource,
+        repeatMax:    f.repeatMax,
+        options:      f.options.map(o => ({ name: o.name, desc: o.desc, min: o.min, type: o.type })),
     });
 
     /* 참석확인 폼: 동적 필드는 자동 복사되므로 UI 없음 → 순수 커스텀 필드만 */
@@ -334,7 +350,7 @@ export async function checkIn(env, corp, phone, customValues) {
         '운영진확인시간': '',
     };
     dynamicGroups.forEach(({ group }) => assignFieldValue(valuesByHeader, group, matched.dynamicValues[group]));
-    customCheckinFields.forEach(f => assignFieldValue(valuesByHeader, f.name, (customValues || {})[f.name]));
+    applyCustomFieldValues(valuesByHeader, customCheckinFields, customValues);
 
     /* ④ 출석 저장 (1회 API 호출, 불가피) */
     await appendRowByHeader(tk, eId, sheetName, valuesByHeader, aMap);
@@ -388,7 +404,7 @@ export async function onSiteRegister(env, corp, ldap, name, phone, fieldValues) 
             '운영진확인시간': '',
         };
         dynamicGroups.forEach(({ group }) => assignFieldValue(valuesByHeader, group, preMatch.dynamicValues[group]));
-        customCheckinFields.forEach(f => assignFieldValue(valuesByHeader, f.name, (fieldValues || {})[f.name]));
+        applyCustomFieldValues(valuesByHeader, customCheckinFields, fieldValues);
 
         await appendRowByHeader(tk, eId, cSheet, valuesByHeader, aMap);
         _checkinCache.set(phoneNorm, preMatch.index);
@@ -458,7 +474,7 @@ export async function onSiteRegister(env, corp, ldap, name, phone, fieldValues) 
         '운영진확인시간': '',
     };
     dynamicGroups.forEach(({ group }) => assignFieldValue(valuesByHeader, group, (fieldValues || {})[group]));
-    customRegisterFields.forEach(f => assignFieldValue(valuesByHeader, f.name, (fieldValues || {})[f.name]));
+    applyCustomFieldValues(valuesByHeader, customRegisterFields, fieldValues);
 
     if (!krewId) {
         valuesByHeader['Index'] = NO_MATCH_LABEL;
@@ -481,6 +497,14 @@ export async function buildResultSheet(env) {
     const eId = env.EVENT_SHEET_ID;
     const cSheet = checkinSheetName(env);
 
+    /* 인원 카운터형 필드 중 "결과 시트에 인원으로 반영"이 예로 표시된 필드 찾기
+       (참석확인용/현장신청용 각각 최대 1개씩 있다고 가정) */
+    const { fieldDefs } = await _loadFieldContext(tk, env);
+    const checkinCountField = fieldDefs.find(f =>
+        f.countsAsAttendance && (f.scope === 'checkin' || f.scope === 'both'));
+    const onsiteCountField = fieldDefs.find(f =>
+        f.countsAsAttendance && (f.scope === 'register' || f.scope === 'both'));
+
     /* ① 응답 시트 읽기 */
     const rMap = await getHeaderMap(tk, eId, SHEET_NAMES.RESPONSE);
     const rCorpCol   = rMap['법인'];
@@ -493,15 +517,15 @@ export async function buildResultSheet(env) {
 
     const responseRows = await getValues(tk, eId, `${SHEET_NAMES.RESPONSE}!A2:Z`);
 
-    /* ② 참석확인 시트에서 체크인된 Index 집합 확보 (Index 기준 diff) */
+    /* ② 참석확인 시트: Index → 전체 행 값 매핑 (diff 판정 + 인원수 조회 둘 다에 사용) */
     const cMap = await getHeaderMap(tk, eId, cSheet).catch(() => ({}));
     const cIndexCol = cMap['Index'];
-    const checkedInIndexes = new Set();
+    const checkedInRows = new Map(); // index -> row values
     if (cIndexCol != null) {
-        const indexes = await getValues(tk, eId, `${cSheet}!${colLetter(cIndexCol)}2:${colLetter(cIndexCol)}`);
-        indexes.forEach(row => {
-            const idx = String((row || [])[0] || '').trim();
-            if (idx) checkedInIndexes.add(idx);
+        const cRows = await getValues(tk, eId, `${cSheet}!A2:Z`);
+        cRows.forEach(row => {
+            const idx = String((row || [])[cIndexCol] || '').trim();
+            if (idx) checkedInRows.set(idx, row);
         });
     }
 
@@ -512,9 +536,15 @@ export async function buildResultSheet(env) {
         const regStatus = String(row[rStatusCol] ?? '').trim();
 
         let status;
+        let headcount = '';
         if (regStatus === RESPONSE_STATUS.CANCEL) status = RESULT_STATUS.PRE_CANCEL;
         else if (regStatus === RESPONSE_STATUS.SAME_DAY_CANCEL) status = RESULT_STATUS.SAME_DAY_CANCEL;
-        else status = checkedInIndexes.has(indexVal) ? RESULT_STATUS.ATTEND : RESULT_STATUS.NO_SHOW;
+        else if (checkedInRows.has(indexVal)) {
+            status = RESULT_STATUS.ATTEND;
+            headcount = sumHeadcount(cMap, checkedInRows.get(indexVal), checkinCountField && checkinCountField.name);
+        } else {
+            status = RESULT_STATUS.NO_SHOW; // 체크인 안 함 → 인원수도 자연히 빈칸
+        }
 
         resultRows.push([
             String(row[rCorpCol] ?? ''),
@@ -522,6 +552,7 @@ export async function buildResultSheet(env) {
             String(row[rNameCol] ?? ''),
             formatPhone(row[rPhoneCol] ?? ''),
             indexVal,
+            headcount,
             status,
         ]);
     });
@@ -545,6 +576,7 @@ export async function buildResultSheet(env) {
                 String(row[oNameCol] ?? ''),
                 formatPhone(row[oPhoneCol] ?? ''),
                 idxVal,
+                sumHeadcount(oMap, row, onsiteCountField && onsiteCountField.name),
                 RESULT_STATUS.ONSITE,
             ]);
         });
@@ -552,7 +584,7 @@ export async function buildResultSheet(env) {
 
     /* ④ 결과 시트 재작성 (헤더는 유지, 데이터 영역만 비우고 새로 씀) */
     const rSheet  = resultSheetName(env);
-    const headers = ['법인', 'LDAP', '이름', '전화번호', 'Index', '상태'];
+    const headers = ['법인', 'LDAP', '이름', '전화번호', 'Index', '인원수', '상태'];
     await ensureSheet(tk, eId, rSheet, headers);
     await clearValues(tk, eId, `${rSheet}!A2:Z`);
     if (resultRows.length) {
@@ -560,11 +592,26 @@ export async function buildResultSheet(env) {
     }
 
     const counts = resultRows.reduce((acc, r) => {
-        acc[r[5]] = (acc[r[5]] || 0) + 1;
+        acc[r[6]] = (acc[r[6]] || 0) + 1;
         return acc;
     }, {});
 
     return { status: 'ok', count: resultRows.length, counts };
+}
+
+/** 특정 시트 한 행에서, fieldName 그룹에 속한 컬럼들(예: "인원(성인)","인원(청소년)")의
+ 값을 전부 더해 총 인원수를 구함. 신청 1건은 최소 신청자 본인 1명이므로,
+ 인원 카운터형 필드를 아예 안 쓰는 행사거나 그 컬럼을 못 찾으면 기본값 1을 반환 */
+function sumHeadcount(map, rowValues, fieldName) {
+    if (!rowValues) return '';
+    if (!fieldName) return 1;
+    let total = 0, found = false;
+    Object.entries(map).forEach(([header, colIdx]) => {
+        if (parseGroupedHeader(header).group !== fieldName) return;
+        found = true;
+        total += parseInt(rowValues[colIdx], 10) || 0;
+    });
+    return found ? total : 1;
 }
 
 
