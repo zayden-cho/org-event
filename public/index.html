@@ -410,10 +410,10 @@
                     : d.slice(0,3) + '-' + d.slice(3,7) + '-' + d.slice(7);
         }
         function applyDateFormat(input) {
-            var d = input.value.replace(/[^0-9]/g, '').slice(0, 6);
-            input.value = d.length <= 2 ? d
-                : d.length <= 4 ? d.slice(0,2) + '-' + d.slice(2)
-                    : d.slice(0,2) + '-' + d.slice(2,4) + '-' + d.slice(4);
+            var d = input.value.replace(/[^0-9]/g, '').slice(0, 8);
+            input.value = d.length <= 4 ? d
+                : d.length <= 6 ? d.slice(0,4) + '-' + d.slice(4)
+                    : d.slice(0,4) + '-' + d.slice(4,6) + '-' + d.slice(6);
         }
 
         /* ── 필드 렌더링 (필드설정/필드옵션 기반, 완전 동적) ──
@@ -542,7 +542,7 @@
                             inp.type = 'tel'; inp.inputMode = 'numeric'; inp.placeholder = '예: 010-1234-5678';
                             inp.addEventListener('input', function() { applyPhoneFormat(inp); });
                         } else if (opt.type === 'date') {
-                            inp.inputMode = 'numeric'; inp.placeholder = '예: 990101'; inp.maxLength = 8;
+                            inp.inputMode = 'numeric'; inp.placeholder = '예: 19990101'; inp.maxLength = 10;
                             inp.addEventListener('input', function() { applyDateFormat(inp); });
                         } else if (opt.type === 'number') {
                             inp.inputMode = 'numeric';
@@ -592,6 +592,19 @@
                     control._sourceName = field.repeatSource;
                     control.getValue = function() { return blockEls.map(function(b) { return b.data; }); };
                     control.isValid  = function() {
+                        /* 짝 필수: 이 필드가 선택이어도, 한 사람 블록 안에서 하위 항목 중
+                           하나라도 채웠다면 나머지도 전부 채워야 함 (부분 입력 방지) */
+                        var allPaired = blockEls.every(function(b) {
+                            var vals = (field.options || []).map(function(opt) { return !!b.data[opt.name]; });
+                            var any = vals.some(function(v) { return v; });
+                            var all = vals.every(function(v) { return v; });
+                            return !any || all;
+                        });
+                        if (!allPaired) {
+                            control.invalidMessage = field.name + ' — 항목을 하나라도 입력하면 같은 사람의 나머지 항목도 모두 입력해야 해요.';
+                            return false;
+                        }
+                        control.invalidMessage = null;
                         if (!field.required) return true;
                         return blockEls.every(function(b) {
                             return (field.options || []).every(function(opt) { return !!b.data[opt.name]; });
@@ -610,7 +623,7 @@
                         input.type = 'tel'; input.inputMode = 'numeric'; input.placeholder = '예: 010-1234-5678';
                         input.addEventListener('input', function() { applyPhoneFormat(input); });
                     } else if (field.type === 'date') {
-                        input.inputMode = 'numeric'; input.placeholder = '예: 990101'; input.maxLength = 8;
+                        input.inputMode = 'numeric'; input.placeholder = '예: 19990101'; input.maxLength = 10;
                         input.addEventListener('input', function() { applyDateFormat(input); });
                     } else if (field.type === 'number') {
                         input.inputMode = 'numeric';
@@ -630,10 +643,12 @@
             syncRepeats(); // 초기 렌더 시점의 반복 기준 필드 값으로 블록 개수 맞춤
         }
 
-        /** 컨트롤 배열 검증 → 첫 실패 필드명 반환 (없으면 null) */
+        /** 컨트롤 배열 검증 → 첫 실패 메시지 반환 (없으면 null) */
         function validateControls(controls) {
             for (var i = 0; i < controls.length; i++) {
-                if (!controls[i].isValid()) return controls[i].name;
+                if (!controls[i].isValid()) {
+                    return controls[i].invalidMessage || (controls[i].name + ' 항목을 입력해 주세요.');
+                }
             }
             return null;
         }
@@ -742,7 +757,7 @@
             if (phone.length < 10) { alert('전화번호를 올바르게 입력해 주세요.'); return; }
 
             var invalidField = validateControls(ciControls);
-            if (invalidField) { alert(invalidField + ' 항목을 입력해 주세요.'); return; }
+            if (invalidField) { alert(invalidField); return; }
 
             if (needsConsent(ciControls) && !document.getElementById('ci-consent').checked) {
                 alert('개인정보 수집·이용에 동의해 주세요.'); return;
@@ -770,7 +785,7 @@
             if (phone.length < 10) { alert('전화번호를 올바르게 입력해 주세요.'); return; }
 
             var invalidField = validateControls(reControls);
-            if (invalidField) { alert(invalidField + ' 항목을 입력해 주세요.'); return; }
+            if (invalidField) { alert(invalidField); return; }
 
             if (!document.getElementById('re-consent').checked) {
                 alert('개인정보 수집·이용에 동의해 주세요.'); return;

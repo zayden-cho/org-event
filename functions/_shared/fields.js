@@ -29,15 +29,15 @@
        등록이 안 된 동적 필드는 참석확인 시 복사는 되지만,
        현장신청 폼에는 노출되지 않는다.
    ─────────────────────────────────────────────────────────────
-   필드설정 시트 컬럼:
-     필드명 / 입력방식 / 어디서 받나요 / 필수 여부 / 제목 옆 설명
-     / 하단 안내 박스 / 표시 순서 / 반복 기준 필드 / 최대 인원
+   필드설정 시트 컬럼 (입력 흐름 순서로 배치):
+     필드명 / 입력방식 / 표시 순서 / 어디서 받나요 / 필수 여부
+     / 제목 옆 설명 / 하단 안내 박스 / 반복 기준 필드 / 최대 인원
      / 결과 시트에 인원으로 반영
      (반복 기준 필드·최대 인원은 입력방식이 "반복 입력"인 경우만 사용.
       결과 시트에 인원으로 반영은 "예"/"아니오" — 인원 카운터형 필드에만
       의미 있으며, 보통 참석확인용/현장신청용 각 1개씩 "예"로 표시)
-   필드옵션 시트 컬럼:
-     필드명 / 옵션명 / 옵션 설명 / 최소값 / 표시 순서 / 옵션 입력방식
+   필드옵션 시트 컬럼 (입력 흐름 순서로 배치):
+     필드명 / 옵션명 / 옵션 입력방식 / 최소값 / 옵션 설명 / 표시 순서
      ("인원 카운터"는 최소값을, "반복 입력"은 옵션 입력방식을 사용.
       "선택 카드"는 둘 다 비워도 됨)
    ─────────────────────────────────────────────────────────────*/
@@ -110,11 +110,11 @@ export async function getFieldDefinitions(token, sheetId) {
         if (!options[fieldName]) options[fieldName] = [];
         options[fieldName].push({
             name:  optName,
-            desc:  String(row[2] || '').trim(),
-            min:   row[3] !== undefined && row[3] !== '' ? Number(row[3]) || 0 : 0,
-            order: row[4] !== undefined && row[4] !== '' ? Number(row[4]) || 0 : options[fieldName].length,
             /* "반복 입력" 타입 필드의 하위 항목에서만 사용 (그 외 타입은 무시됨) */
-            type:  INPUT_TYPE_MAP[String(row[5] || '').trim()] || 'text',
+            type:  INPUT_TYPE_MAP[String(row[2] || '').trim()] || 'text',
+            min:   row[3] !== undefined && row[3] !== '' ? Number(row[3]) || 0 : 0,
+            desc:  String(row[4] || '').trim(),
+            order: row[5] !== undefined && row[5] !== '' ? Number(row[5]) || 0 : options[fieldName].length,
         });
     });
     Object.values(options).forEach(list => list.sort((a, b) => a.order - b.order));
@@ -126,11 +126,11 @@ export async function getFieldDefinitions(token, sheetId) {
             return {
                 name,
                 type:         INPUT_TYPE_MAP[String(row[1] || '').trim()] || 'text',
-                scope:        SCOPE_MAP[String(row[2] || '').trim()]      || 'both',
-                required:     REQUIRED_MAP[String(row[3] || '').trim()]  ?? false,
-                sideNote:     String(row[4] || '').trim(),
-                helpNote:     String(row[5] || '').trim(),
-                order:        row[6] !== undefined && row[6] !== '' ? Number(row[6]) || 0 : 0,
+                order:        row[2] !== undefined && row[2] !== '' ? Number(row[2]) || 0 : 0,
+                scope:        SCOPE_MAP[String(row[3] || '').trim()]      || 'both',
+                required:     REQUIRED_MAP[String(row[4] || '').trim()]  ?? false,
+                sideNote:     String(row[5] || '').trim(),
+                helpNote:     String(row[6] || '').trim(),
                 /* "반복 입력" 타입 전용 — 이 필드의 값 개수를 결정하는, 같은 화면에 있는
                    인원 카운터/숫자 필드의 이름. 그 필드가 응답시트 헤더와 일치하는
                    동적 필드면(예: "참여인원") 참석확인 화면엔 UI가 없어 개수를 알 수 없으므로,
