@@ -6,6 +6,7 @@ import {
     getCacheStatus,
     buildResultSheet,
 } from '../_shared/logic.js';
+import { errorResponse } from '../_shared/http.js';
 
 export async function onRequestPost(context) {
     try {
@@ -46,6 +47,6 @@ export async function onRequestPost(context) {
 
         return Response.json(result);
     } catch (e) {
-        return Response.json({ status: 'error', message: e.message }, { status: 500 });
+        return errorResponse(e);
     }
 }

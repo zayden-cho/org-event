@@ -39,6 +39,7 @@ import {
     getHeaderMap, batchGetValues, getValues,
     appendRowByHeader, updateCell, findRowByIndex,
     ensureSheet, colLetter, clearValues, setValues,
+    dataRange, lastColIdx, clearHeaderCache,
 } from './sheets.js';
 import {
     SHEET_NAMES, DEFAULT_SHEET_NAMES, RESPONSE_STATUS, RESULT_STATUS, NO_MATCH_LABEL,
@@ -59,8 +60,56 @@ const KV_TTL_SEC      = 86400; // 1일
 const _checkinCache      = new Map();
 let   _checkinCacheReady = false;
 
-/* ── 응답 모듈 캐시 (KV 읽기 비용 제거용 이중 레이어) ──── */
-let _responseModuleCache = null;
+/* ── 공유 캐시 계층 (응답 데이터 / 필드 정의) ────────────────
+   [메모리 1분] → [KV] → [Google Sheets] 순서로 조회.
+   - 메모리 TTL(1분): isolate가 낡은 값을 영원히 들고 있던 문제 방지.
+                      1분마다 KV만 다시 확인하면 되므로 Sheets 호출은 거의 안 나감.
+   - inflight 합류  : 같은 isolate에서 동시에 들어온 요청이 같은 데이터를
+                      각자 시트에서 읽지 않고 한 번의 로딩에 합류.
+   - 오류 시 stale  : Sheets가 429/장애여도, 이전 값이 있으면 그걸로 계속 서비스. */
+const MEM_TTL_MS    = 60 * 1000;
+const FIELD_KV_KEY  = 'krew_field_ctx';
+const FIELD_KV_TTL  = 600;                 // 필드정의는 10분 (갱신 버튼으로 즉시 반영 가능)
+const _mem          = new Map();           // name → { v, t }
+const _inflight     = new Map();           // name → Promise
+
+async function _sharedCache(env, name, kvKey, kvTtlSec, loader) {
+    const hit = _mem.get(name);
+    if (hit && Date.now() - hit.t < MEM_TTL_MS) return hit.v;
+    if (_inflight.has(name)) return _inflight.get(name);
+
+    const p = (async () => {
+        const kv = env.RESPONSE_CACHE_KV;
+        try {
+            if (kv) {
+                const v = await kv.get(kvKey, 'json');
+                if (v) { _mem.set(name, { v, t: Date.now() }); return v; }
+            }
+            return await _reloadShared(env, name, kvKey, kvTtlSec, loader);
+        } catch (e) {
+            /* 로딩 실패(429 등) → 이전에 받아둔 값이 있으면 그걸로 버팀 (10초 뒤 재시도) */
+            if (hit) { _mem.set(name, { v: hit.v, t: Date.now() - MEM_TTL_MS + 10000 }); return hit.v; }
+            throw e;
+        }
+    })().finally(() => _inflight.delete(name));
+    _inflight.set(name, p);
+    return p;
+}
+
+/** 캐시를 무시하고 시트에서 새로 읽어 메모리+KV에 저장 */
+async function _reloadShared(env, name, kvKey, kvTtlSec, loader) {
+    const v = await loader();
+    _mem.set(name, { v, t: Date.now() });
+    if (env.RESPONSE_CACHE_KV) {
+        try { await env.RESPONSE_CACHE_KV.put(kvKey, JSON.stringify(v), { expirationTtl: kvTtlSec }); } catch { /* KV 한도 등: 치명적이지 않음 */ }
+    }
+    return v;
+}
+
+/* ── 크루유니언(조합원 DB) 인덱스 캐시: 메모리 전용 (개인정보라 KV에는 저장하지 않음) ── */
+const KREW_TTL_MS = 10 * 60 * 1000;
+let _krewCache    = null;      // { byPhone: Map, cols, t }
+let _krewInflight = null;
 
 
 /* ═══════════════════════════════════════════════════════════
@@ -69,7 +118,7 @@ let _responseModuleCache = null;
 
 async function getToken(env) {
     return getAccessToken(env.SERVICE_ACCOUNT_EMAIL,
-        env.SERVICE_ACCOUNT_KEY.replace(/\\n/g, '\n'));
+        env.SERVICE_ACCOUNT_KEY.replace(/\\n/g, '\n'), env.RESPONSE_CACHE_KV);
 }
 
 function checkinSheetName(env) {
@@ -85,6 +134,11 @@ function resultSheetName(env) {
 }
 
 /** 필드설정에서 "동적 필드가 아닌" 커스텀 필드만 골라, 노출범위(scope)로 필터 */
+/** 응답 시트 참여상태가 사전취소/당일취소인지 판정 (참석확인/현장신청 공용) */
+function isCanceledStatus(regStatus) {
+    return regStatus === RESPONSE_STATUS.CANCEL || regStatus === RESPONSE_STATUS.SAME_DAY_CANCEL;
+}
+
 function customFieldsForScope(fieldDefs, dynamicNames, scope) {
     return fieldDefs.filter(f =>
         !dynamicNames.has(f.name) && (f.scope === scope || f.scope === 'both'));
@@ -105,11 +159,10 @@ function applyCustomFieldValues(valuesByHeader, customFields, submittedValues) {
  폼 노출 정의(참여인원, 체험프로그램 등)는 그대로 유지하되, 응답시트에 없는
  "순수 커스텀 필드"(생년월일, 1365포털ID 등)만 걸러낸다 */
 async function _loadFieldContext(tk, env) {
-    const eId = env.EVENT_SHEET_ID;
-    const [rawFieldDefs, dynamicGroups] = await Promise.all([
-        getFieldDefinitions(tk, env.FIELD_SHEET_ID),
-        getResponseDynamicGroups(tk, eId, SHEET_NAMES.RESPONSE),
-    ]);
+    /* 필드설정/필드옵션/응답 헤더는 행사 중 거의 안 바뀌므로 공유 캐시로 제공.
+       (이전에는 /api/config·체크인·현장신청마다 매번 시트를 2번씩 읽었음) */
+    const { rawFieldDefs, dynamicGroups } = await _sharedCache(
+        env, 'field', FIELD_KV_KEY, FIELD_KV_TTL, () => _fetchFieldContext(tk, env));
     const dynamicNames = new Set(dynamicGroups.map(g => g.group));
 
     const customFieldsEnabled = env.ENABLE_CUSTOM_FIELDS === 'true';
@@ -118,6 +171,15 @@ async function _loadFieldContext(tk, env) {
         : rawFieldDefs.filter(f => dynamicNames.has(f.name));
 
     return { fieldDefs, dynamicGroups, dynamicNames };
+}
+
+/** 필드 컨텍스트 원본 로딩 (캐시 miss / 갱신 시에만 호출) */
+async function _fetchFieldContext(tk, env) {
+    const [rawFieldDefs, dynamicGroups] = await Promise.all([
+        getFieldDefinitions(tk, env.FIELD_SHEET_ID),
+        getResponseDynamicGroups(tk, env.EVENT_SHEET_ID, SHEET_NAMES.RESPONSE),
+    ]);
+    return { rawFieldDefs, dynamicGroups };
 }
 
 function buildCheckinHeaders(dynamicGroups, customCheckinFields) {
@@ -156,7 +218,7 @@ async function _fetchAndProcessResponse(tk, env) {
     }
 
     const dynamicGroups = await getResponseDynamicGroups(tk, eId, SHEET_NAMES.RESPONSE);
-    const rows = await getValues(tk, eId, `${SHEET_NAMES.RESPONSE}!A2:Z`);
+    const rows = await getValues(tk, eId, dataRange(SHEET_NAMES.RESPONSE, rMap));
 
     return rows
         .filter(row => row.length > 0)
@@ -172,28 +234,35 @@ async function _fetchAndProcessResponse(tk, env) {
         .filter(r => r.phoneNorm && r.corp && r.index);
 }
 
-/** 응답 캐시 읽기 (모듈 → KV → Sheets 순서로 fallback) */
+/** 응답 캐시 읽기 (메모리 1분 → KV → Sheets) */
 async function _getResponseCache(env) {
-    if (_responseModuleCache) return _responseModuleCache;
+    return _sharedCache(env, 'response', KV_RESPONSE_KEY, KV_TTL_SEC, async () => {
+        const tk = await getToken(env);
+        return _fetchAndProcessResponse(tk, env);
+    });
+}
 
-    if (env.RESPONSE_CACHE_KV) {
-        const kvData = await env.RESPONSE_CACHE_KV.get(KV_RESPONSE_KEY, 'json');
-        if (kvData) {
-            _responseModuleCache = kvData;
-            return kvData;
-        }
+/* 같은 isolate에서 같은 번호의 체크인이 동시에 처리 중인지 추적 (더블탭/재시도 경합 방지) */
+const _checkinInflight = new Map();   // phoneNorm → Promise
+
+/** 참석확인 행을 저장하고 중복 체크 캐시에 반영.
+ - 같은 번호가 이미 저장 중이면 그 결과를 기다렸다가 "중복"으로 응답 (행이 2개 생기지 않게)
+ - 앞선 요청이 실패했다면 이 요청이 이어서 저장을 시도한다 */
+async function _saveCheckin(tk, eId, sheetName, aMap, phoneNorm, indexVal, valuesByHeader) {
+    const pending = _checkinInflight.get(phoneNorm);
+    if (pending) {
+        try { await pending; } catch { /* 앞선 요청 실패 → 아래에서 이어서 시도 */ }
+        if (_checkinCache.has(phoneNorm)) return { duplicate: true, qrId: _checkinCache.get(phoneNorm) };
+        return _saveCheckin(tk, eId, sheetName, aMap, phoneNorm, indexVal, valuesByHeader);
     }
 
-    const tk   = await getToken(env);
-    const data = await _fetchAndProcessResponse(tk, env);
-    _responseModuleCache = data;
-
-    if (env.RESPONSE_CACHE_KV) {
-        await env.RESPONSE_CACHE_KV.put(KV_RESPONSE_KEY, JSON.stringify(data),
-            { expirationTtl: KV_TTL_SEC });
-    }
-
-    return data;
+    const work = (async () => {
+        await appendRowByHeader(tk, eId, sheetName, valuesByHeader, aMap);
+        _checkinCache.set(phoneNorm, indexVal);
+    })();
+    _checkinInflight.set(phoneNorm, work);
+    try { await work; } finally { _checkinInflight.delete(phoneNorm); }
+    return { duplicate: false, qrId: indexVal };
 }
 
 /** 참석확인 캐시 로드 (isolate 첫 checkIn 요청 시 1회만 실행) */
@@ -228,26 +297,28 @@ async function _loadCheckinCache(tk, env, sheetName, aMap) {
    ═══════════════════════════════════════════════════════════ */
 
 export async function preloadResponseCache(env) {
-    const tk   = await getToken(env);
-    const data = await _fetchAndProcessResponse(tk, env);
+    const tk = await getToken(env);
+    clearHeaderCache();   // 시트 구조(헤더 위치)가 바뀌었을 수도 있으니 헤더 캐시도 같이 비움
 
-    _responseModuleCache = data;
-
-    if (env.RESPONSE_CACHE_KV) {
-        await env.RESPONSE_CACHE_KV.put(KV_RESPONSE_KEY, JSON.stringify(data),
-            { expirationTtl: KV_TTL_SEC });
-    }
+    /* 필드정의 → 응답 순서로 새로 읽어 메모리+KV 갱신 (응답 파싱이 헤더를 참조하므로 순서 중요) */
+    await _reloadShared(env, 'field', FIELD_KV_KEY, FIELD_KV_TTL, () => _fetchFieldContext(tk, env));
+    const data = await _reloadShared(env, 'response', KV_RESPONSE_KEY, KV_TTL_SEC,
+        () => _fetchAndProcessResponse(tk, env));
 
     return { status: 'ok', count: data.length };
 }
 
 export async function invalidateCache(env) {
-    _responseModuleCache = null;
-    _checkinCacheReady    = false;
+    _mem.clear();
+    _krewCache = null;
+    clearHeaderCache();
+    _checkinCacheReady = false;
     _checkinCache.clear();
+    _checkinInflight.clear();
 
     if (env.RESPONSE_CACHE_KV) {
         await env.RESPONSE_CACHE_KV.delete(KV_RESPONSE_KEY);
+        await env.RESPONSE_CACHE_KV.delete(FIELD_KV_KEY);
     }
 
     return { status: 'ok' };
@@ -263,10 +334,11 @@ export async function getCacheStatus(env) {
         kvCount  = kvData ? kvData.length : 0;
     }
 
+    const mem = _mem.get('response');
     return {
         status:            'ok',
-        responseCache:     _responseModuleCache ? '모듈 캐시 있음' : '없음',
-        responseCount:     _responseModuleCache ? _responseModuleCache.length : 0,
+        responseCache:     mem ? '모듈 캐시 있음' : '없음',
+        responseCount:     mem ? mem.v.length : 0,
         kvStatus,
         kvCount,
         checkinCacheReady: _checkinCacheReady,
@@ -338,6 +410,11 @@ export async function checkIn(env, corp, phone, customValues) {
     const matched = responseData.find(r => r.phoneNorm === phoneNorm && r.corp === corp);
     if (!matched) return { status: 'ok', qrType: 'NOSUB', qrId: 'KU-NOSUB' };
 
+    /* 사전취소/당일취소자는 참석확인 자체를 막음 (참여신청 상태만 체크인 허용) */
+    if (isCanceledStatus(matched.regStatus)) {
+        return { status: 'ok', qrType: 'CANCELED', qrId: 'KU-CANCELED' };
+    }
+
     /* ③ 저장할 값 구성: 동적 필드는 응답데이터에서 자동 복사, 커스텀 필드는 입력값 사용
        Index는 응답 시트에서 이미 검증된 값을 그대로 사용 (참석확인 QR 조회키 겸용) */
     const valuesByHeader = {
@@ -352,13 +429,40 @@ export async function checkIn(env, corp, phone, customValues) {
     dynamicGroups.forEach(({ group }) => assignFieldValue(valuesByHeader, group, matched.dynamicValues[group]));
     applyCustomFieldValues(valuesByHeader, customCheckinFields, customValues);
 
-    /* ④ 출석 저장 (1회 API 호출, 불가피) */
-    await appendRowByHeader(tk, eId, sheetName, valuesByHeader, aMap);
+    /* ④ 출석 저장 + ⑤ 캐시 업데이트 (같은 번호가 동시에 들어와도 1건만 저장) */
+    const saved = await _saveCheckin(tk, eId, sheetName, aMap, phoneNorm, matched.index, valuesByHeader);
+    return { status: 'ok', qrType: 'CHECKIN', qrId: saved.qrId, isDuplicate: saved.duplicate };
+}
 
-    /* ⑤ 참석확인 캐시 업데이트 (메모리만, 이후 중복 체크 즉시 처리) */
-    _checkinCache.set(phoneNorm, matched.index);
 
-    return { status: 'ok', qrType: 'CHECKIN', qrId: matched.index, isDuplicate: false };
+/** 크루유니언 DB를 "전화번호 → 행들" 인덱스로 만들어 10분간 메모리에 보관.
+ (이전: 현장신청 1건마다 전화번호 컬럼 전체 읽기 + 일치 행 읽기 = 2회씩 호출) */
+async function _getKrewIndex(tk, env) {
+    if (_krewCache && Date.now() - _krewCache.t < KREW_TTL_MS) return _krewCache;
+    if (_krewInflight) return _krewInflight;
+
+    _krewInflight = (async () => {
+        const sid  = env.KREWUNION_SHEET_ID;
+        const kMap = await getHeaderMap(tk, sid, SHEET_NAMES.KREWUNION);
+        const cols = {
+            id:    kMap['krewunionId'] ?? kMap['Krewunionid'] ?? kMap['Index'] ?? kMap['index'] ?? 0,
+            corp:  kMap['법인']                          ?? 1,
+            name:  kMap['한글명'] ?? kMap['이름']        ?? 2,
+            ldap:  kMap['영문명'] ?? kMap['LDAP']        ?? 3,
+            phone: kMap['연락처'] ?? kMap['전화번호']    ?? 4,
+        };
+        const rows = await getValues(tk, sid, dataRange(SHEET_NAMES.KREWUNION, kMap));
+        const byPhone = new Map();
+        for (const row of rows) {
+            const p = normalizePhone(String((row || [])[cols.phone] || ''));
+            if (!p) continue;
+            if (!byPhone.has(p)) byPhone.set(p, []);
+            byPhone.get(p).push(row);
+        }
+        _krewCache = { byPhone, cols, t: Date.now() };
+        return _krewCache;
+    })().finally(() => { _krewInflight = null; });
+    return _krewInflight;
 }
 
 
@@ -384,6 +488,11 @@ export async function onSiteRegister(env, corp, ldap, name, phone, fieldValues) 
     const responseData = await _getResponseCache(env);
     const preMatch      = responseData.find(r => r.phoneNorm === phoneNorm);
 
+    /* 사전취소/당일취소자는 현장신청 화면으로 들어와도 참석확인 처리하지 않음 */
+    if (preMatch && isCanceledStatus(preMatch.regStatus)) {
+        return { status: 'ok', qrType: 'CANCELED', qrId: 'KU-CANCELED' };
+    }
+
     if (preMatch) {
         /* 사전신청자가 현장신청 화면으로 들어온 경우 → 참석확인으로 처리 */
         await ensureSheet(tk, eId, cSheet, buildCheckinHeaders(dynamicGroups, customCheckinFields));
@@ -406,9 +515,8 @@ export async function onSiteRegister(env, corp, ldap, name, phone, fieldValues) 
         dynamicGroups.forEach(({ group }) => assignFieldValue(valuesByHeader, group, preMatch.dynamicValues[group]));
         applyCustomFieldValues(valuesByHeader, customCheckinFields, fieldValues);
 
-        await appendRowByHeader(tk, eId, cSheet, valuesByHeader, aMap);
-        _checkinCache.set(phoneNorm, preMatch.index);
-        return { status: 'ok', qrType: 'CHECKIN', qrId: preMatch.index, isDuplicate: false };
+        const saved = await _saveCheckin(tk, eId, cSheet, aMap, phoneNorm, preMatch.index, valuesByHeader);
+        return { status: 'ok', qrType: 'CHECKIN', qrId: saved.qrId, isDuplicate: saved.duplicate };
     }
 
     /* ② 현장 시트 중복 확인 */
@@ -418,15 +526,20 @@ export async function onSiteRegister(env, corp, ldap, name, phone, fieldValues) 
     const oPhoneCol = oMap['전화번호'];
     const oIndexCol = oMap['Index'];
 
-    const oPhones = oPhoneCol != null
-        ? await getValues(tk, eId, `${oSheet}!${colLetter(oPhoneCol)}2:${colLetter(oPhoneCol)}`)
-        : [];
-
-    for (let i = 0; i < oPhones.length; i++) {
-        if (normalizePhone(String((oPhones[i] || [])[0] || '')) === phoneNorm) {
-            const idxRow = await getValues(tk, eId,
-                `${oSheet}!${colLetter(oIndexCol)}${i + 2}:${colLetter(oIndexCol)}${i + 2}`);
-            return { status: 'ok', qrType: 'ONSITE', qrId: String((idxRow[0] || [])[0] || '') };
+    /* 전화번호/Index 두 컬럼을 batchGet 1번으로 가져와 메모리에서 대조
+       (이전: 전화번호 컬럼 읽기 → 일치 시 Index 셀 또 읽기 = 최대 2번) */
+    if (oPhoneCol != null && oIndexCol != null) {
+        const [oPhones, oIndexes] = await batchGetValues(tk, eId, [
+            `${oSheet}!${colLetter(oPhoneCol)}2:${colLetter(oPhoneCol)}`,
+            `${oSheet}!${colLetter(oIndexCol)}2:${colLetter(oIndexCol)}`,
+        ]);
+        for (let i = 0; i < oPhones.length; i++) {
+            if (normalizePhone(String((oPhones[i] || [])[0] || '')) === phoneNorm) {
+                const dupIdx = String((oIndexes[i] || [])[0] || '');
+                /* 비조합원으로 이미 접수된 번호가 다시 오면 NOMEM으로 (예전엔 ONSITE:일치없음으로 잘못 나갔음) */
+                if (!dupIdx || dupIdx === NO_MATCH_LABEL) return { status: 'ok', qrType: 'NOMEM', qrId: 'KU-NOMEM' };
+                return { status: 'ok', qrType: 'ONSITE', qrId: dupIdx };
+            }
         }
     }
 
@@ -434,31 +547,16 @@ export async function onSiteRegister(env, corp, ldap, name, phone, fieldValues) 
     let memberStatus = '비조합원';
     let krewId       = null;
     try {
-        const kMap      = await getHeaderMap(tk, env.KREWUNION_SHEET_ID, SHEET_NAMES.KREWUNION);
-        const kIdCol    = kMap['krewunionId'] ?? kMap['Krewunionid'] ?? kMap['Index'] ?? kMap['index'] ?? 0;
-        const kCorpCol  = kMap['법인']              ?? 1;
-        const kNameCol  = kMap['한글명'] ?? kMap['이름']     ?? 2;
-        const kLdapCol  = kMap['영문명'] ?? kMap['LDAP']     ?? 3;
-        const kPhoneCol = kMap['연락처'] ?? kMap['전화번호'] ?? 4;
+        const krew = await _getKrewIndex(tk, env);
+        for (const row of (krew.byPhone.get(phoneNorm) || [])) {
+            const baseMatch = String(row[krew.cols.corp] || '').trim() === corp
+                && String(row[krew.cols.name] || '').trim() === name;
+            const ldapMatch = ldap ? String(row[krew.cols.ldap] || '').trim() === ldap : true;
 
-        const kPhones = await getValues(tk, env.KREWUNION_SHEET_ID,
-            `${SHEET_NAMES.KREWUNION}!${colLetter(kPhoneCol)}2:${colLetter(kPhoneCol)}`);
-
-        for (let i = 0; i < kPhones.length; i++) {
-            if (normalizePhone(String((kPhones[i] || [])[0] || '')) === phoneNorm) {
-                const rowNum = i + 2;
-                const row    = (await getValues(tk, env.KREWUNION_SHEET_ID,
-                    `${SHEET_NAMES.KREWUNION}!A${rowNum}:Z${rowNum}`))[0] || [];
-
-                const baseMatch = String(row[kCorpCol] || '').trim() === corp
-                    && String(row[kNameCol] || '').trim() === name;
-                const ldapMatch = ldap ? String(row[kLdapCol] || '').trim() === ldap : true;
-
-                if (baseMatch && ldapMatch) {
-                    memberStatus = '조합원';
-                    krewId       = String(row[kIdCol] || '').trim();
-                    break;
-                }
+            if (baseMatch && ldapMatch) {
+                memberStatus = '조합원';
+                krewId       = String(row[krew.cols.id] || '').trim();
+                break;
             }
         }
     } catch { memberStatus = '조합원DB조회실패'; }
@@ -515,14 +613,14 @@ export async function buildResultSheet(env) {
     const rStatusCol = rMap['참여상태'];
     if (rPhoneCol == null || rIndexCol == null) throw new Error('응답 시트 헤더를 확인해 주세요.');
 
-    const responseRows = await getValues(tk, eId, `${SHEET_NAMES.RESPONSE}!A2:Z`);
+    const responseRows = await getValues(tk, eId, dataRange(SHEET_NAMES.RESPONSE, rMap));
 
     /* ② 참석확인 시트: Index → 전체 행 값 매핑 (diff 판정 + 인원수 조회 둘 다에 사용) */
     const cMap = await getHeaderMap(tk, eId, cSheet).catch(() => ({}));
     const cIndexCol = cMap['Index'];
     const checkedInRows = new Map(); // index -> row values
     if (cIndexCol != null) {
-        const cRows = await getValues(tk, eId, `${cSheet}!A2:Z`);
+        const cRows = await getValues(tk, eId, dataRange(cSheet, cMap));
         cRows.forEach(row => {
             const idx = String((row || [])[cIndexCol] || '').trim();
             if (idx) checkedInRows.set(idx, row);
@@ -566,7 +664,7 @@ export async function buildResultSheet(env) {
     const oPhoneCol = oMap['전화번호'];
     const oIndexCol = oMap['Index'];
     if (oPhoneCol != null && oIndexCol != null) {
-        const onsiteRows = await getValues(tk, eId, `${oSheet}!A2:Z`);
+        const onsiteRows = await getValues(tk, eId, dataRange(oSheet, oMap));
         onsiteRows.filter(row => row.length > 0).forEach(row => {
             const idxVal = String(row[oIndexCol] ?? '').trim();
             if (!idxVal || idxVal === NO_MATCH_LABEL) return;
@@ -634,8 +732,9 @@ export async function adminScanQR(env, qrString, pin) {
     const qrType = parts[0];
     const qrId   = parts.slice(1).join(':').trim();
 
-    if (qrType === 'NOSUB') return { status: 'found', type: 'NOSUB' };
-    if (qrType === 'NOMEM') return { status: 'found', type: 'NOMEM' };
+    if (qrType === 'NOSUB')    return { status: 'found', type: 'NOSUB' };
+    if (qrType === 'NOMEM')    return { status: 'found', type: 'NOMEM' };
+    if (qrType === 'CANCELED') return { status: 'found', type: 'CANCELED' };
     if (!qrId) return { status: 'notfound', message: '유효하지 않은 QR 코드입니다.' };
 
     const tk        = await getToken(env);
@@ -649,13 +748,13 @@ export async function adminScanQR(env, qrString, pin) {
     const adminIdx  = map['운영진확인시간'];
     if (lookupIdx == null) return { status: 'error', message: `${lookupKey} 컬럼을 찾을 수 없습니다.` };
 
-    const found = await findRowByIndex(tk, eId, sheetName, lookupIdx, qrId);
+    const found = await findRowByIndex(tk, eId, sheetName, lookupIdx, qrId, lastColIdx(map));
     if (!found) return { status: 'notfound', message: 'QR 정보를 찾을 수 없습니다.\n다시 스캔해 주세요.' };
 
     const { rowNum, values } = found;
 
     const adminVal         = adminIdx != null ? (values[adminIdx] ?? '') : '';
-    const alreadyConfirmed = adminVal && String(adminVal).trim() !== '';
+    const alreadyConfirmed = String(adminVal ?? '').trim() !== '';
     const confirmedAt      = alreadyConfirmed ? String(adminVal).slice(11, 16) : null;
 
     if (!alreadyConfirmed && adminIdx != null) {

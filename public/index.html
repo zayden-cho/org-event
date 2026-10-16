@@ -326,7 +326,7 @@
 
 <div class="loading-overlay" id="loading">
     <div class="spinner"></div>
-    <div class="loading-text">처리 중...</div>
+    <div class="loading-text" id="loading-text">처리 중...</div>
 </div>
 
 <script>
@@ -336,22 +336,71 @@
         var CHECKIN_FIELDS = [], REGISTER_FIELDS = [];
         var ciControls = [], reControls = [];
 
+        /* ── 일시 오류(429/503/네트워크)면 잠시 뒤 자동 재시도하는 fetch → JSON ──
+           접속자가 몰려 서버/구글 시트가 잠깐 막힐 때, 사용자가 에러를 보기 전에 조용히 다시 시도한다.
+           (POST도 안전: 서버가 같은 전화번호의 중복 접수를 걸러내므로 재시도해도 중복 저장되지 않음) */
+        function fetchJson(url, options, retries, onRetry) {
+            var attempt = 0;
+            function once() {
+                return fetch(url, options)
+                    .then(function(r) {
+                        return r.json()
+                            .catch(function() { return { status: 'error', message: '서버 응답을 읽지 못했어요.' }; })
+                            .then(function(j) {
+                                if (r.status === 429 || r.status === 503) j.retryable = true;
+                                return j;
+                            });
+                    })
+                    .catch(function() { return { status: 'error', retryable: true, message: '네트워크 연결을 확인해 주세요.' }; })
+                    .then(function(j) {
+                        if (j && j.status === 'error' && j.retryable && attempt < retries) {
+                            attempt++;
+                            if (onRetry) onRetry(attempt);
+                            var wait = 1200 * attempt + Math.random() * 800;   // 1.2~2초 → 2.4~3.2초 → ...
+                            return new Promise(function(res) { setTimeout(res, wait); }).then(once);
+                        }
+                        return j;
+                    });
+            }
+            return once();
+        }
+        function postJson(url, body) {
+            var txt = document.getElementById('loading-text');
+            return fetchJson(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            }, 3, function() { if (txt) txt.textContent = '접속자가 많아 잠시 기다리는 중이에요...'; })
+                .then(function(res) { if (txt) txt.textContent = '처리 중...'; return res; });
+        }
+
         /* ── 서버에서 설정 받아오기 (/api/config) ── */
-        fetch('/api/config')
-            .then(function(r) { return r.json(); })
-            .then(function(cfg) {
-                CORPS            = cfg.corps           || [];
-                ON_SITE_OPEN     = cfg.onSiteOpen      !== false;
-                CHECKIN_FIELDS   = cfg.checkinFields    || [];
-                REGISTER_FIELDS  = cfg.registerFields   || [];
+        fetchJson('/api/config', {}, 3).then(function(cfg) {
+            if (!cfg || cfg.status === 'error' || !cfg.corps) {
+                /* 예전엔 실패해도 조용히 넘어가서 깨진 화면("참석 참석 접수")이 떴음 → 원인 안내 + 다시 시도 */
+                var d = document.querySelector('.home-desc');
+                if (d) {
+                    d.innerHTML = '';
+                    d.style.color = '#dc2626';
+                    d.appendChild(document.createTextNode((cfg && cfg.message) || '설정을 불러오지 못했어요.'));
+                    var b = document.createElement('button');
+                    b.className = 'btn btn-ghost'; b.style.marginTop = '14px'; b.textContent = '다시 불러오기';
+                    b.addEventListener('click', function() { location.reload(); });
+                    d.appendChild(b);
+                }
+                return;
+            }
+            CORPS            = cfg.corps           || [];
+            ON_SITE_OPEN     = cfg.onSiteOpen      !== false;
+            CHECKIN_FIELDS   = cfg.checkinFields    || [];
+            REGISTER_FIELDS  = cfg.registerFields   || [];
 
-                var t = document.getElementById('home-title');
-                if (t) { t.textContent = (cfg.eventTitle || '참석') + ' 참석 접수'; }
-                document.title = cfg.eventTitle || '참석 접수';
+            var t = document.getElementById('home-title');
+            if (t) { t.textContent = (cfg.eventTitle || '참석') + ' 참석 접수'; }
+            document.title = cfg.eventTitle || '참석 접수';
 
-                initPage();
-            })
-            .catch(function() { initPage(); });
+            initPage();
+        });
 
         /* ── 초기화 (config 수신 후 실행) ── */
         function initPage() {
@@ -716,6 +765,7 @@
            참석확인 (중복)   주황  #FEE500
            현장신청          파랑  #60a5fa
            미신청/비조합원   빨강  #ef4444
+           취소자(사전/당일) 회색  #a8a29e
            ──────────────────────────────────────────────────────── */
         var QR_STYLES = {
             checkin_new: { titleColor: '#15803d', cardBorder: '#22c55e' },
@@ -723,6 +773,7 @@
             onsite:      { titleColor: '#1d4ed8', cardBorder: '#60a5fa' },
             nosub:       { titleColor: '#dc2626', cardBorder: '#ef4444' },
             nomem:       { titleColor: '#dc2626', cardBorder: '#ef4444' },
+            canceled:    { titleColor: '#57534e', cardBorder: '#a8a29e' },
         };
 
         /* ── 결과 처리 ── */
@@ -740,6 +791,7 @@
             else if (res.qrType === 'ONSITE')                      styleKey = 'onsite';
             else if (res.qrType === 'NOSUB')                       styleKey = 'nosub';
             else if (res.qrType === 'NOMEM')                       styleKey = 'nomem';
+            else if (res.qrType === 'CANCELED')                    styleKey = 'canceled';
 
             var style = QR_STYLES[styleKey];
             document.getElementById('qr-title').style.color     = style.titleColor;
@@ -764,12 +816,7 @@
             }
 
             setLoading(true);
-            fetch('/api/checkin', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ corp: corp, phone: phone, fields: collectValues(ciControls) })
-            })
-                .then(function(r) { return r.json(); })
+            postJson('/api/checkin', { corp: corp, phone: phone, fields: collectValues(ciControls) })
                 .then(function(res) { setLoading(false); handleResult(res); })
                 .catch(function() { setLoading(false); alert('서버 오류가 발생했습니다.\n운영진에게 문의하세요.'); });
         }
@@ -792,12 +839,7 @@
             }
 
             setLoading(true);
-            fetch('/api/register', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ corp: corp, ldap: ldap, name: name, phone: phone, fields: collectValues(reControls) })
-            })
-                .then(function(r) { return r.json(); })
+            postJson('/api/register', { corp: corp, ldap: ldap, name: name, phone: phone, fields: collectValues(reControls) })
                 .then(function(res) { setLoading(false); handleResult(res); })
                 .catch(function() { setLoading(false); alert('서버 오류가 발생했습니다.\n운영진에게 문의하세요.'); });
         }

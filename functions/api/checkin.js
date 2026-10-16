@@ -4,6 +4,7 @@
            { 필드명: 값 또는 { 옵션명: 값 } } */
 
 import { checkIn } from '../_shared/logic.js';
+import { errorResponse } from '../_shared/http.js';
 
 export async function onRequestPost(context) {
     try {
@@ -11,6 +12,6 @@ export async function onRequestPost(context) {
         const result = await checkIn(context.env, corp, phone, fields || {});
         return Response.json(result);
     } catch (e) {
-        return Response.json({ status: 'error', message: e.message }, { status: 500 });
+        return errorResponse(e);
     }
 }
