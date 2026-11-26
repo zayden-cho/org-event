@@ -70,6 +70,7 @@
         .result-btn{font-size:12px;font-weight:700;font-family:var(--font);padding:6px 12px;border-radius:8px;border:1.5px solid var(--accent);cursor:pointer;background:transparent;color:var(--accent);white-space:nowrap;transition:opacity .15s}
         .result-btn:active{opacity:.8}
         .result-btn.loading{opacity:.5;cursor:not-allowed}
+        a.result-btn{text-decoration:none;display:inline-block}
 
         .scanner-label{font-size:12px;font-weight:600;color:var(--text3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:12px}
         #qr-reader{width:100%;border-radius:20px;overflow:hidden;background:#000;margin-bottom:16px}
@@ -158,6 +159,10 @@
         <div class="result-bar">
             <div class="result-status" id="result-status">결과 시트는 필요할 때 눌러서 계산해요</div>
             <button class="result-btn" id="result-btn">결과 시트 생성/갱신</button>
+        </div>
+        <div class="result-bar">
+            <div class="result-status">출석한 분들로 구슬 추첨을 진행해요</div>
+            <a class="result-btn" id="draw-link" href="/draw/">구슬 추첨 열기</a>
         </div>
         <div class="scanner-label">QR 코드 스캔</div>
         <div id="qr-reader"></div>
@@ -331,6 +336,7 @@
                     setLoading(false);
                     if (res.status === 'ok') {
                         _pin = pin;
+                        try { sessionStorage.setItem('krew_admin_pin', pin); } catch (e) {}   // 추첨 화면에서 다시 입력하지 않도록
                         pinWrap.style.display     = 'none';
                         scannerWrap.style.display = 'flex';
                         startScanner();
@@ -478,6 +484,7 @@
         }
         function logout() {
             _pin = '';
+            try { sessionStorage.removeItem('krew_admin_pin'); } catch (e) {}
             if (_scanner) { _scanner.stop().catch(function(){}); _scanner = null; }
             _scanning = false; _processing = false;
             hideResults();

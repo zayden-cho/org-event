@@ -17,6 +17,7 @@ export const CORPS = [
     '서울아레나',
     '야나두',
     '엑스엘게임즈',
+    '얼라인스튜디오',
     '카카오',
     '카카오게임즈',
     '카카오모빌리티',
@@ -24,6 +25,7 @@ export const CORPS = [
     '카카오스타일',
     '카카오엔터테인먼트',
     '카카오엔터프라이즈',
+    '카카오인베스트먼트',
     '카카오임팩트',
     '카카오페이',
     '카카오페이증권',
@@ -46,11 +48,14 @@ export const SHEET_NAMES = {
     KREWUNION: '크루유니언',
 };
 
-/* 위 세 환경변수를 안 넣었을 때 쓰는 기본값 (기존 하드코딩 값과 동일) */
+/* 위 환경변수를 안 넣었을 때 쓰는 기본값 (기존 하드코딩 값과 동일).
+ 추첨용 두 시트(구슬수/추첨기록)도 같은 방식 (MARBLE_SHEET_NAME / DRAW_SHEET_NAME) */
 export const DEFAULT_SHEET_NAMES = {
     CHECKIN: '테스트',
     ONSITE:  '현장',
     RESULT:  '결과',
+    MARBLES: '구슬수',     // 추첨: 사람별 구슬수 기본값 (MARBLE_SHEET_NAME)
+    DRAW:    '추첨기록',   // 추첨: 당첨 기록 (DRAW_SHEET_NAME)
 };
 
 /* 응답 시트의 원본 "참여상태" 값 (외부 신청폼/운영진이 직접 입력, 그대로 참고만 함) */
