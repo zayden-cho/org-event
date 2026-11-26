@@ -34,8 +34,10 @@
      / 제목 옆 설명 / 하단 안내 박스 / 반복 기준 필드 / 최대 인원
      / 결과 시트에 인원으로 반영
      (반복 기준 필드·최대 인원은 입력방식이 "반복 입력"인 경우만 사용.
-      결과 시트에 인원으로 반영은 "예"/"아니오" — 인원 카운터형 필드에만
-      의미 있으며, 보통 참석확인용/현장신청용 각 1개씩 "예"로 표시)
+      결과 시트에 인원으로 반영은 "예"/"아니오" — 인원 카운터형 필드에만 의미 있음.
+      "어디서 받나요"는 "받지 않음"(또는 빈칸)으로 둘 수 있고, 그 경우 입력창 없이
+      결과 시트 인원 계산에만 쓰인다. 인원 계산은 "어디서 받나요"와 무관하게,
+      출석/현장 시트에 실제로 그 필드의 컬럼이 있고 값이 있으면 그걸 합산한다)
    필드옵션 시트 컬럼 (입력 흐름 순서로 배치):
      필드명 / 옵션명 / 옵션 입력방식 / 최소값 / 옵션 설명 / 표시 순서
      ("인원 카운터"는 최소값을, "반복 입력"은 옵션 입력방식을 사용.
@@ -64,12 +66,23 @@ const SCOPE_MAP = {
     '참석확인 때만': 'checkin',
     '현장신청 때만': 'register',
     '둘 다':         'both',
+    /* 어느 화면에서도 입력받지 않음. "결과 시트에 인원으로 반영"만 표시하고 싶은 경우
+       (예: 사전신청 때 받은 참여인원을 결과 시트에서 합산만 하고 싶을 때)에 사용.
+       "어디서 받나요" 칸을 비워둬도 같은 의미로 처리한다. */
+    '받지 않음':     'none',
 };
 
 const REQUIRED_MAP = {
     '필수': true,
     '선택': false,
 };
+
+/** "어디서 받나요" 값 해석. 비어 있으면 받지 않음(none), 알 수 없는 값은 예전처럼 둘 다 */
+function parseScope(raw) {
+    const v = String(raw || '').trim();
+    if (v === '') return 'none';
+    return SCOPE_MAP[v] || 'both';
+}
 
 function scopeIncludes(scope, target) {
     return scope === 'both' || scope === target;
@@ -127,7 +140,7 @@ export async function getFieldDefinitions(token, sheetId) {
                 name,
                 type:         INPUT_TYPE_MAP[String(row[1] || '').trim()] || 'text',
                 order:        row[2] !== undefined && row[2] !== '' ? Number(row[2]) || 0 : 0,
-                scope:        SCOPE_MAP[String(row[3] || '').trim()]      || 'both',
+                scope:        parseScope(row[3]),
                 required:     REQUIRED_MAP[String(row[4] || '').trim()]  ?? false,
                 sideNote:     String(row[5] || '').trim(),
                 helpNote:     String(row[6] || '').trim(),

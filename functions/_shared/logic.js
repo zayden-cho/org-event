@@ -29,8 +29,9 @@
                            / [동적 이벤트 필드(신규입력)] / 조합원여부 / [커스텀 필드] / Index / 운영진확인시간
      결과 시트           : 법인 / LDAP / 이름 / 전화번호 / Index / 인원수 / 상태
                            (응답 vs 참석확인 Index diff + 현장신청 조합원매칭분, 온디맨드 재계산.
-                            인원수는 "결과 시트에 인원으로 반영"이 예로 표시된 필드의 합계값이며,
-                            그런 필드를 안 쓰는 행사는 신청 1건 = 신청자 본인 1명으로 간주해 항상 1.
+                            인원수는 "결과 시트에 인원으로 반영"이 예로 표시된 필드의 합계값 ("어디서 받나요"와 무관,
+                            그 시트에 실제 컬럼/값이 있는 후보를 우선순위대로 사용).
+                            그런 필드가 없거나 값이 비어 있으면 신청 1건 = 신청자 본인 1명으로 간주해 1.
                             노쇼/사전취소/당일취소는 체크인 자체가 없어 인원수도 항상 빈칸)
    ─────────────────────────────────────────────────────────*/
 
@@ -595,13 +596,16 @@ export async function buildResultSheet(env) {
     const eId = env.EVENT_SHEET_ID;
     const cSheet = checkinSheetName(env);
 
-    /* 인원 카운터형 필드 중 "결과 시트에 인원으로 반영"이 예로 표시된 필드 찾기
-       (참석확인용/현장신청용 각각 최대 1개씩 있다고 가정) */
-    const { fieldDefs } = await _loadFieldContext(tk, env);
-    const checkinCountField = fieldDefs.find(f =>
-        f.countsAsAttendance && (f.scope === 'checkin' || f.scope === 'both'));
-    const onsiteCountField = fieldDefs.find(f =>
-        f.countsAsAttendance && (f.scope === 'register' || f.scope === 'both'));
+    /* "결과 시트에 인원으로 반영"이 예로 표시된 필드들 = 인원수 후보.
+       "어디서 받나요"는 보지 않는다 (입력을 안 받는 필드도 계산에는 쓸 수 있어야 하므로).
+       후보 우선순위: 참석확인/현장신청 때 직접 입력받은 필드(커스텀) → 사전신청 때 받은 값(동적 필드).
+       → "실제 참석 인원"처럼 현장에서 다시 확인한 값이 있으면 그걸 쓰고,
+         비어 있으면 사전신청 인원으로 대체한다. */
+    const { fieldDefs, dynamicNames } = await _loadFieldContext(tk, env);
+    const countFields = fieldDefs
+        .filter(f => f.countsAsAttendance)
+        .sort((a, b) => Number(dynamicNames.has(a.name)) - Number(dynamicNames.has(b.name)))
+        .map(f => f.name);
 
     /* ① 응답 시트 읽기 */
     const rMap = await getHeaderMap(tk, eId, SHEET_NAMES.RESPONSE);
@@ -639,7 +643,7 @@ export async function buildResultSheet(env) {
         else if (regStatus === RESPONSE_STATUS.SAME_DAY_CANCEL) status = RESULT_STATUS.SAME_DAY_CANCEL;
         else if (checkedInRows.has(indexVal)) {
             status = RESULT_STATUS.ATTEND;
-            headcount = sumHeadcount(cMap, checkedInRows.get(indexVal), checkinCountField && checkinCountField.name);
+            headcount = sumHeadcount(cMap, checkedInRows.get(indexVal), countFields);
         } else {
             status = RESULT_STATUS.NO_SHOW; // 체크인 안 함 → 인원수도 자연히 빈칸
         }
@@ -674,7 +678,7 @@ export async function buildResultSheet(env) {
                 String(row[oNameCol] ?? ''),
                 formatPhone(row[oPhoneCol] ?? ''),
                 idxVal,
-                sumHeadcount(oMap, row, onsiteCountField && onsiteCountField.name),
+                sumHeadcount(oMap, row, countFields),
                 RESULT_STATUS.ONSITE,
             ]);
         });
@@ -697,19 +701,23 @@ export async function buildResultSheet(env) {
     return { status: 'ok', count: resultRows.length, counts };
 }
 
-/** 특정 시트 한 행에서, fieldName 그룹에 속한 컬럼들(예: "인원(성인)","인원(청소년)")의
- 값을 전부 더해 총 인원수를 구함. 신청 1건은 최소 신청자 본인 1명이므로,
- 인원 카운터형 필드를 아예 안 쓰는 행사거나 그 컬럼을 못 찾으면 기본값 1을 반환 */
-function sumHeadcount(map, rowValues, fieldName) {
+/** 특정 시트 한 행에서 총 인원수를 구한다.
+ fieldNames: 인원 후보 필드명들(우선순위 순). 각 후보에 대해 그 시트에 실제로 있는 컬럼
+ (예: "참여인원(성인)","참여인원(청소년)","참여인원(어린이)")의 값을 전부 합산하고,
+ 합계가 1 이상인 첫 후보를 사용한다. 후보가 없거나, 컬럼이 없거나, 값이 비어 있으면
+ 신청 1건 = 신청자 본인 1명으로 보고 1을 반환 */
+function sumHeadcount(map, rowValues, fieldNames) {
     if (!rowValues) return '';
-    if (!fieldName) return 1;
-    let total = 0, found = false;
-    Object.entries(map).forEach(([header, colIdx]) => {
-        if (parseGroupedHeader(header).group !== fieldName) return;
-        found = true;
-        total += parseInt(rowValues[colIdx], 10) || 0;
-    });
-    return found ? total : 1;
+    for (const fieldName of (fieldNames || [])) {
+        let total = 0, found = false;
+        Object.entries(map).forEach(([header, colIdx]) => {
+            if (parseGroupedHeader(header).group !== fieldName) return;
+            found = true;
+            total += parseInt(rowValues[colIdx], 10) || 0;
+        });
+        if (found && total >= 1) return total;
+    }
+    return 1;
 }
 
 
